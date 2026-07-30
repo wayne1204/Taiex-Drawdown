@@ -269,15 +269,24 @@ class TestIsStale(NetworkGuardedTestCase):
 
 
 # --------------------------------------------------------------------------
-# fetch_index_month  (real cache fixture: data/raw/MI_5MINS_HIST/202607.json)
+# fetch_index_month / fetch_turnover_month
+#
+# Shape and row-count assertions run against a CLOSED month. Pointing them at
+# the current month made them rot daily: the monthly cache legitimately gains a
+# row after every session, so a hard-coded count passes on the day it is written
+# and fails the next. Value spot-checks below stay pinned to their own dates,
+# which never move.
 # --------------------------------------------------------------------------
+
+CLOSED_MONTH = "202606"          # June 2026: 21 sessions, will never change
+CLOSED_MONTH_DAYS = 21
 
 class TestFetchIndexMonth(NetworkGuardedTestCase):
 
     def test_parses_cached_month_into_iso_keyed_dict(self):
-        result = fetch_data.fetch_index_month("202607", rebuild_only=True)
+        result = fetch_data.fetch_index_month(CLOSED_MONTH, rebuild_only=True)
         self.assertIsInstance(result, dict)
-        self.assertEqual(len(result), 20)
+        self.assertEqual(len(result), CLOSED_MONTH_DAYS)
         for k in result:
             # ISO date format, YYYY-MM-DD
             self.assertRegex(k, r"^\d{4}-\d{2}-\d{2}$")
@@ -293,16 +302,12 @@ class TestFetchIndexMonth(NetworkGuardedTestCase):
         self.assertEqual(result, {})
 
 
-# --------------------------------------------------------------------------
-# fetch_turnover_month  (real cache fixture: data/raw/FMTQIK/202607.json)
-# --------------------------------------------------------------------------
-
 class TestFetchTurnoverMonth(NetworkGuardedTestCase):
 
     def test_parses_cached_month_into_iso_keyed_dict(self):
-        result = fetch_data.fetch_turnover_month("202607", rebuild_only=True)
+        result = fetch_data.fetch_turnover_month(CLOSED_MONTH, rebuild_only=True)
         self.assertIsInstance(result, dict)
-        self.assertEqual(len(result), 20)
+        self.assertEqual(len(result), CLOSED_MONTH_DAYS)
         for k in result:
             self.assertRegex(k, r"^\d{4}-\d{2}-\d{2}$")
         for row in result.values():

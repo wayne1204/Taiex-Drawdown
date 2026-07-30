@@ -220,6 +220,36 @@ def fetch(endpoint, path, params, key, rebuild_only=False):
     return cached
 
 
+def merge_with_existing(path, fetched):
+    """
+    Union this run's rows with the previous output, keyed by date.
+
+    Returns (merged_rows_sorted_by_date, days_carried_over). A row from `fetched`
+    always beats a stored row for the same date - a refetch is by definition
+    newer. Anything unreadable is treated as absent: a corrupt or hand-edited
+    output file must not be able to inject rows into a clean fetch.
+
+    To genuinely shrink the series, delete data/taiex-daily.json and refetch.
+    """
+    if not os.path.exists(path):
+        return list(fetched), 0
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            prior = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"  existing output unreadable ({e}); writing only this run's range",
+              file=sys.stderr)
+        return list(fetched), 0
+    if not isinstance(prior, list):
+        return list(fetched), 0
+
+    by_date = {r["date"]: r for r in prior
+               if isinstance(r, dict) and isinstance(r.get("date"), str)}
+    carried = sum(1 for d in by_date if d not in {r["date"] for r in fetched})
+    by_date.update({r["date"]: r for r in fetched})
+    return [by_date[d] for d in sorted(by_date)], carried
+
+
 def month_range(start_ym, end_ym):
     y, m = int(start_ym[:4]), int(start_ym[5:7])
     ey, em = int(end_ym[:4]), int(end_ym[5:7])
@@ -422,7 +452,7 @@ def main():
 
     # --- Stage 3: merge and write -------------------------------------------
     print("\n[3/3] Merging")
-    merged = []
+    fetched = []
     mismatch = 0
     for d in trading_days:
         k = index_data[d]
@@ -434,7 +464,7 @@ def main():
         if cc is not None and k["close"] is not None and abs(cc - k["close"]) > 0.5:
             mismatch += 1
 
-        merged.append({
+        fetched.append({
             "date": d,
             "open": k["open"], "high": k["high"], "low": k["low"], "close": k["close"],
             "turnoverYi": t.get("turnoverYi"),
@@ -443,7 +473,16 @@ def main():
             "shortBalanceUnits": m.get("shortBalanceUnits"),
         })
 
+    # Fold this run's range into whatever the previous run wrote. --start names
+    # the range to FETCH, not the range to keep: without this, topping up the
+    # current month with `--start 2026-07` would replace a seven-year series
+    # with twenty days. Freshly fetched days win on collision.
     out_json = os.path.join(DATA_DIR, "taiex-daily.json")
+    merged, carried = merge_with_existing(out_json, fetched)
+    if carried:
+        print(f"  carried over {carried} day(s) from the existing output "
+              f"outside {args.start} -> {end_ym}")
+
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(merged, f, ensure_ascii=False, separators=(",", ":"))
 
@@ -451,8 +490,8 @@ def main():
     # fetch() is blocked by CORS there, but a <script src> is not.
     meta = {
         "generatedAt": datetime.now().isoformat(timespec="seconds"),
-        "start": trading_days[0],
-        "end": trading_days[-1],
+        "start": merged[0]["date"],
+        "end": merged[-1]["date"],
         "tradingDays": len(merged),
         "coverage": {
             "turnover": sum(1 for r in merged if r["turnoverYi"] is not None),

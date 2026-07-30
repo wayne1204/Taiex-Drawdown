@@ -82,17 +82,26 @@
     margin-bottom:22px}
   table{border-collapse:collapse;width:100%;min-width:1460px;font-size:13px}
   th,td{padding:9px 11px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
+  /* The sort affordance is a real <button> inside the th, so it is reachable by
+     keyboard and announced as a control. The th keeps the sticky positioning
+     and the sort arrow; the button carries the padding and the hit area. */
   th{
     color:var(--ink-3);font-weight:500;font-size:11.5px;text-align:right;
-    cursor:pointer;user-select:none;position:sticky;top:0;background:var(--surface-2);
-    letter-spacing:.02em}
-  th:hover{color:var(--ink)}
-  th.sorted::after{content:" ▾";opacity:.85}
-  th.sorted.asc::after{content:" ▴"}
+    user-select:none;position:sticky;top:0;background:var(--surface-2);
+    letter-spacing:.02em;padding:0}
+  th button{
+    appearance:none;background:transparent;border:0;color:inherit;font:inherit;
+    letter-spacing:inherit;text-align:inherit;white-space:nowrap;
+    width:100%;padding:9px 11px;cursor:pointer}
+  th button:hover{color:var(--ink)}
+  th.sorted button::after{content:" ▾";opacity:.85}
+  th.sorted.asc button::after{content:" ▴"}
   th:first-child,td:first-child{text-align:center}
   th.txt,td.txt{text-align:left}
   tbody tr{cursor:pointer}
   tbody tr:hover{background:#20201d}
+  th button:focus-visible,tbody tr:focus-visible{
+    outline:2px solid var(--c-turnover);outline-offset:-2px}
   tbody tr[aria-selected="true"]{background:#2b2320;box-shadow:inset 3px 0 0 var(--c-up)}
   tbody tr:last-child td{border-bottom:0}
   .neg{color:var(--c-down)}   /* Taiwan convention: green = down / net sell / decrease */
@@ -225,8 +234,10 @@
       <button id="sort-dir" aria-label="排序方向">▼ 由大到小</button>
     </div>
     <div class="tbl-scroll">
-      <table>
-        <thead><tr id="thead"></tr></thead>
+      <!-- role="grid": the rows are selectable, and in the phone card view the
+           display:block rules would otherwise strip the implicit table roles. -->
+      <table role="grid" aria-label="修正波段明細">
+        <thead><tr id="thead" role="row"></tr></thead>
         <tbody id="tbody"></tbody>
       </table>
     </div>
@@ -325,6 +336,10 @@
   const nf = (v,d=0)=> (v===null||v===undefined||Number.isNaN(v)) ? '—'
         : v.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
   const sgn = (v,d=0)=> (v===null||v===undefined) ? '—' : (v>0?'+':'') + nf(v,d);
+  // Amount in 億, or a bare em-dash. Appending the unit unconditionally would
+  // render a missing value as "— 億", which reads as a quantity rather than a gap.
+  const yi  = (v,d=0)=> (v===null||v===undefined) ? '—' : nf(v,d)+' 億';
+  const sgnYi = (v,d=0)=> (v===null||v===undefined) ? '—' : sgn(v,d)+' 億';
   const fd  = d => d ? d.slice(0,4)+'/'+d.slice(5,7)+'/'+d.slice(8,10) : '—';
   // Correction detection lives in detect.js so the browser and verify.js run
   // the exact same code path.
@@ -468,11 +483,11 @@
       ${li('收盤', nf(r.close,2), COLORS.index)}
       ${li('漲跌', chg===null?'—':`<span style="color:${chgColor}">${sgn(chg,2)} (${sgn(chgPct,2)}%)</span>`)}
       ${li('高 / 低', `${nf(r.high,2)} / ${nf(r.low,2)}`)}
-      ${li('成交金額', nf(r.turnoverYi,0)+' 億', COLORS.turnover)}
-      ${li('外資買賣超', r.foreignNetYi===null?'—':`<span style="color:${r.foreignNetYi>=0?COLORS.up:COLORS.down}">${sgn(r.foreignNetYi,1)} 億</span>`,
+      ${li('成交金額', yi(r.turnoverYi), COLORS.turnover)}
+      ${li('外資買賣超', r.foreignNetYi===null?'—':`<span style="color:${r.foreignNetYi>=0?COLORS.up:COLORS.down}">${sgnYi(r.foreignNetYi,1)}</span>`,
            r.foreignNetYi===null?null:(r.foreignNetYi>=0?COLORS.up:COLORS.down))}
-      ${li('外資累計', cumView[i]==='-' ? '—' : sgn(cumView[i],0)+' 億', COLORS.cum)}
-      ${li('融資餘額', nf(r.marginBalanceYi,0)+' 億', COLORS.margin)}
+      ${li('外資累計', cumView[i]==='-' ? '—' : sgnYi(cumView[i],0), COLORS.cum)}
+      ${li('融資餘額', yi(r.marginBalanceYi), COLORS.margin)}
       ${band}</div>`;
   }
 
@@ -677,17 +692,29 @@
   }
 
   function renderTable(){
-    document.getElementById('thead').innerHTML = COLS.map(c=>
-      `<th data-k="${c.k}" class="${c.txt?'txt':''} ${sortKey===c.k?'sorted '+(sortAsc?'asc':''):''}">${c.t}</th>`
-    ).join('');
+    document.getElementById('thead').innerHTML = COLS.map(c=>{
+      const on = sortKey===c.k;
+      return `<th role="columnheader" scope="col" data-k="${c.k}" ` +
+        `aria-sort="${on ? (sortAsc?'ascending':'descending') : 'none'}" ` +
+        `class="${c.txt?'txt':''} ${on?'sorted '+(sortAsc?'asc':''):''}">` +
+        `<button type="button">${c.t}</button></th>`;
+    }).join('');
 
     document.getElementById('tbody').innerHTML = sortedEpisodes().map(({e,i})=>
-      `<tr data-i="${i}" aria-selected="${i===selected}">` +
-      COLS.map(c=>`<td class="${c.txt?'txt':'num'}" data-label="${c.t}">${c.f(e,i)}</td>`).join('') +
+      `<tr data-i="${i}" role="row" tabindex="0" aria-selected="${i===selected}">` +
+      COLS.map(c=>`<td role="gridcell" class="${c.txt?'txt':'num'}" data-label="${c.t}">${c.f(e,i)}</td>`).join('') +
       `</tr>`
     ).join('');
 
     syncSortUI();
+  }
+
+  // renderTable() replaces the header and row nodes wholesale, so anything that
+  // re-renders in response to a keypress has to put focus back deliberately —
+  // otherwise a keyboard user is silently dumped at the top of the document.
+  function refocus(sel){
+    const el = document.querySelector(sel);
+    if(el) el.focus();
   }
 
   // ── Interaction ───────────────────────────────────────────
@@ -721,6 +748,29 @@
     select(+tr.dataset.i);
   });
 
+  // Keyboard equivalent of the row click, plus arrow-key movement between rows
+  // so the grid can be worked without a pointer.
+  document.getElementById('tbody').addEventListener('keydown', ev=>{
+    const tr = ev.target.closest('tr'); if(!tr) return;
+    const i = +tr.dataset.i;
+    if(ev.key === 'Enter' || ev.key === ' '){
+      ev.preventDefault();                     // Space would scroll the page
+      select(i);
+      refocus(`#tbody tr[data-i="${i}"]`);
+      return;
+    }
+    const step = ev.key === 'ArrowDown' ? 1 : ev.key === 'ArrowUp' ? -1 : 0;
+    if(step){
+      ev.preventDefault();
+      const next = step > 0 ? tr.nextElementSibling : tr.previousElementSibling;
+      if(next) next.focus();
+    }else if(ev.key === 'Home' || ev.key === 'End'){
+      ev.preventDefault();
+      const all = document.querySelectorAll('#tbody tr');
+      (ev.key === 'Home' ? all[0] : all[all.length-1]).focus();
+    }
+  });
+
   // Mobile sort control. The sticky headers are hidden in card view, so sorting
   // needs its own affordance; it shares sortKey/sortAsc with the header clicks
   // so the two can never disagree.
@@ -743,11 +793,14 @@
     renderTable();
   });
 
+  // One handler covers both mouse and keyboard: the header control is a real
+  // button, so Enter/Space arrive here as clicks.
   document.getElementById('thead').addEventListener('click', ev=>{
     const th = ev.target.closest('th'); if(!th) return;
     const k = th.dataset.k;
     if(sortKey===k) sortAsc = !sortAsc; else { sortKey=k; sortAsc=false; }
     renderTable();
+    refocus(`#thead th[data-k="${k}"] button`);
   });
 
   function segHandler(id, apply, after){
@@ -825,7 +878,14 @@
   // ── Recompute ─────────────────────────────────────────────
   function recompute(){
     episodes = detect(threshold, mode);
+    // The episode list itself just changed, so the old selection index no longer
+    // refers to the same wave. Drop the zoom and the cumulative rebase with it:
+    // keeping a window anchored to an episode that no longer exists leaves the
+    // user in an unexplained 100-session view with no highlighted row to explain
+    // it, and the flow panel still rebased to that vanished episode's start.
     selected = -1;
+    zoomRange = null;
+    setCumBase(0);
     renderKpis(); renderChart(); renderTable();
   }
 
