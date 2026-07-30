@@ -312,6 +312,46 @@ module.exports = {
           `candle span ${spanOf(zoomedCandle).toFixed(0)} → line span ${spanOf(zoomedLine).toFixed(0)}`);
         t.eq("chart-type toggle flips back to line", typeOfMain(), "line");
 
+        // ── 法人 selector ───────────────────────────────────────────────────
+        // The two flow panels are the only thing that changes. If the series
+        // data switched but a title still said 外資, the page would be labelling
+        // one desk's money with another desk's name.
+        {
+          const flowSeries = () => (chart.getOption().series || [])[3];
+          const titleAt = i => String(((chart.getOption().title || [])[i] || {}).text || "");
+          const pick = v => doc.querySelector(`#seg-desk button[data-v='${v}']`).click();
+          const D = window.TAIEX_DATA;
+          // Earlier blocks leave a row selected, which rebases the cumulative
+          // line to that window; compare against the full series instead.
+          const sel = doc.querySelector('#tbody tr[aria-selected="true"]');
+          if (sel) sel.click();
+          const lastOf = k => D[D.length - 1][k];
+
+          t.eq("defaults to 外資", flowSeries().name, "外資買賣超");
+
+          for (const [v, label, key] of [["trust", "投信", "trustNetYi"],
+                                         ["dealer", "自營商", "dealerNetYi"],
+                                         ["foreign", "外資", "foreignNetYi"]]) {
+            pick(v);
+            const s = flowSeries();
+            t.ok(`${label}: series, both panel titles and the data all switch`,
+              s.name === label + "買賣超" &&
+              titleAt(3).startsWith(label) && titleAt(4).startsWith(label) &&
+              s.data[D.length - 1] === lastOf(key),
+              `${s.name} | ${titleAt(3)} | last ${s.data[D.length - 1]} vs ${lastOf(key)}`);
+
+            const cum = (chart.getOption().series || [])[4].data;
+            const want = +D.reduce((a, r) => a + (r[key] || 0), 0).toFixed(2);
+            t.ok(`${label}: cumulative line re-sums that desk`,
+              Math.abs(cum[cum.length - 1] - want) < 0.02,
+              `${cum[cum.length - 1]} vs ${want}`);
+          }
+
+          t.ok("switching desk does not disturb the episode table",
+            doc.querySelectorAll("#tbody tr").length > 0,
+            `${doc.querySelectorAll("#tbody tr").length} rows`);
+        }
+
         // ── Current-episode context strip ───────────────────────────────────
         // The KPI row states the live drawdown; this section is what makes it
         // mean anything. Its ranks must be derived from the same episode list

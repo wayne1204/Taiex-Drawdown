@@ -329,31 +329,66 @@ class TestFetchTurnoverMonth(NetworkGuardedTestCase):
 
 
 # --------------------------------------------------------------------------
-# fetch_foreign_day  (real cache fixtures: data/raw/BFI82U/*.json)
+# desk_of / fetch_institutions_day  (real cache fixtures: data/raw/BFI82U/*.json)
 # --------------------------------------------------------------------------
 
-class TestFetchForeignDay(NetworkGuardedTestCase):
+class TestDeskOf(unittest.TestCase):
+    """Row-label classification. The overlap between the two tokens is the
+    whole point: 外資自營商 is foreign money, not a domestic dealer desk."""
 
-    def test_known_foreign_net_value_20260729(self):
-        result = fetch_data.fetch_foreign_day("20260729", rebuild_only=True)
-        self.assertIsInstance(result, float)
-        self.assertAlmostEqual(result, -222.52)
+    def test_foreign_rows(self):
+        self.assertEqual(fetch_data.desk_of("外資及陸資(不含外資自營商)"), "foreign")
+        self.assertEqual(fetch_data.desk_of("外資自營商"), "foreign")
+
+    def test_foreign_dealer_is_not_counted_as_dealer(self):
+        # Contains BOTH 外資 and 自營商; must land in exactly one bucket.
+        self.assertNotEqual(fetch_data.desk_of("外資自營商"), "dealer")
+
+    def test_domestic_desks(self):
+        self.assertEqual(fetch_data.desk_of("自營商(自行買賣)"), "dealer")
+        self.assertEqual(fetch_data.desk_of("自營商(避險)"), "dealer")
+        self.assertEqual(fetch_data.desk_of("投信"), "trust")
+
+    def test_total_row_is_excluded(self):
+        self.assertIsNone(fetch_data.desk_of("合計"))
+
+
+class TestFetchInstitutionsDay(NetworkGuardedTestCase):
+
+    def test_known_values_20260729(self):
+        result = fetch_data.fetch_institutions_day("20260729", rebuild_only=True)
+        self.assertIsInstance(result, dict)
+        self.assertEqual(set(result), {"foreignNetYi", "trustNetYi", "dealerNetYi"})
+        self.assertAlmostEqual(result["foreignNetYi"], -222.52)
 
     def test_known_foreign_net_value_20260717(self):
-        result = fetch_data.fetch_foreign_day("20260717", rebuild_only=True)
-        self.assertAlmostEqual(result, -1883.15)
+        result = fetch_data.fetch_institutions_day("20260717", rebuild_only=True)
+        self.assertAlmostEqual(result["foreignNetYi"], -1883.15)
 
     def test_sums_all_rows_containing_foreign_token(self):
         # 2026-07-29 has two rows containing the 外資 token:
         #   外資及陸資(不含外資自營商) -22,251,858,551
         #   外資自營商                            0
         # The market convention sums them; total / 1e8 rounded to 2dp.
-        result = fetch_data.fetch_foreign_day("20260729", rebuild_only=True)
+        result = fetch_data.fetch_institutions_day("20260729", rebuild_only=True)
         expected = round((-22_251_858_551 + 0) / 1e8, 2)
-        self.assertAlmostEqual(result, expected)
+        self.assertAlmostEqual(result["foreignNetYi"], expected)
+
+    def test_sums_both_dealer_desks(self):
+        # 2026-07-30: 自營商(自行買賣) -504,368,492 + 自營商(避險) -14,722,165,301
+        result = fetch_data.fetch_institutions_day("20260730", rebuild_only=True)
+        expected = round((-504_368_492 + -14_722_165_301) / 1e8, 2)
+        self.assertAlmostEqual(result["dealerNetYi"], expected)
+
+    def test_trust_is_independent_of_foreign(self):
+        # 2026-07-30 is the case that motivates the feature: foreign sold hard
+        # while trusts bought. Opposite signs, so the two cannot be conflated.
+        result = fetch_data.fetch_institutions_day("20260730", rebuild_only=True)
+        self.assertLess(result["foreignNetYi"], 0)
+        self.assertGreater(result["trustNetYi"], 0)
 
     def test_missing_cache_returns_none_not_exception(self):
-        result = fetch_data.fetch_foreign_day("19900101", rebuild_only=True)
+        result = fetch_data.fetch_institutions_day("19900101", rebuild_only=True)
         self.assertIsNone(result)
 
 

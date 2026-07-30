@@ -250,6 +250,14 @@
         </div>
       </div>
       <div>
+        <span class="ctrl-label">法人</span>
+        <div class="seg" id="seg-desk" role="group" aria-label="法人買賣超對象">
+          <button data-v="foreign" aria-pressed="true">外資</button>
+          <button data-v="trust">投信</button>
+          <button data-v="dealer">自營商</button>
+        </div>
+      </div>
+      <div>
         <span class="ctrl-label">&nbsp;</span>
         <button class="btn" id="btn-csv">匯出 CSV</button>
       </div>
@@ -291,9 +299,9 @@
       <div class="legend">
         <span><i class="dot" id="lg-index" style="background:var(--c-index)"></i>加權指數</span>
         <span><i class="dot" style="background:var(--c-turnover)"></i>成交金額</span>
-        <span><i class="dot" style="background:var(--c-up)"></i>外資買超</span>
-        <span><i class="dot" style="background:var(--c-down)"></i>外資賣超</span>
-        <span><i class="dot" style="background:var(--c-cum)"></i>外資累計買賣超</span>
+        <span><i class="dot" style="background:var(--c-up)"></i>買超</span>
+        <span><i class="dot" style="background:var(--c-down)"></i>賣超</span>
+        <span><i class="dot" style="background:var(--c-cum)"></i>累計買賣超</span>
         <span><i class="dot" style="background:var(--c-margin)"></i>融資餘額</span>
         <span><i class="dot" style="background:var(--c-band-on)"></i>修正區間</span>
       </div>
@@ -357,7 +365,20 @@
   const gap    = v => (v===null||v===undefined) ? '-' : v;   // '-' renders as a gap in ECharts
   const closes = rows.map(r=>gap(r.close));
   const turn   = rows.map(r=>gap(r.turnoverYi));
-  const fgn    = rows.map(r=>gap(r.foreignNetYi));
+  let desk = 'foreign';          // which desk the two flow panels show
+
+  // TWSE publishes three institutional desks. Only one is plotted at a time:
+  // three overlapping bar series across 1,800 sessions is unreadable, and the
+  // palette is validated for the hues already in use — a fourth and fifth
+  // categorical colour would need re-validating for CVD separation. The
+  // selector keeps it to one series, so no new hue is introduced at all.
+  const DESKS = {
+    foreign:{key:'foreignNetYi', label:'外資'},
+    trust:  {key:'trustNetYi',   label:'投信'},
+    dealer: {key:'dealerNetYi',  label:'自營商'}
+  };
+  const deskFlow = () => rows.map(r=>gap(r[DESKS[desk].key]));
+  let fgn = deskFlow();
   const mgn    = rows.map(r=>gap(r.marginBalanceYi));
 
   // Cumulative foreign net, rebased to the start of whatever window is in view.
@@ -369,17 +390,19 @@
   // A missing day counts as no change, so the line stays continuous.
   let cumBase = 0;
   function buildCum(from){
+    const k = DESKS[desk].key;
     let s = 0;
     return rows.map((r, i) => {
       if(i < from) return '-';                 // outside the window: draw nothing
-      s += (r.foreignNetYi || 0);
+      s += (r[k] || 0);
       return +s.toFixed(2);
     });
   }
   let cumView = buildCum(0);
+  const deskName = () => DESKS[desk].label;
   const cumTitle = () => cumBase > 0
-    ? `外資累計買賣超（億元，自 ${fd(dates[cumBase])} 起算）`
-    : '外資累計買賣超（億元，自期初起算）';
+    ? `${deskName()}累計買賣超（億元，自 ${fd(dates[cumBase])} 起算）`
+    : `${deskName()}累計買賣超（億元，自期初起算）`;
 
   // ── Formatting ────────────────────────────────────────────
   const nf = (v,d=0)=> (v===null||v===undefined||Number.isNaN(v)) ? '—'
@@ -457,9 +480,10 @@
   // Phones get the same panels, just tighter: a 70px y-axis gutter eats a fifth
   // of a 390px screen, and the full stack needs the page to scroll rather than
   // each panel being squashed.
-  const NAMES = ['加權指數','距前高回檔（%）','成交金額（億元）','外資買賣超（億元）',
-                 '外資累計買賣超（億元）','融資餘額（億元）'];
-  const CUM = 4;                 // the one panel whose title is computed, not fixed
+  const NAMES = ['加權指數','距前高回檔（%）','成交金額（億元）','買賣超（億元）',
+                 '累計買賣超（億元）','融資餘額（億元）'];
+  const CUM = 4;                 // computed title: desk name + rebase date
+  const FLOW = 3;                // computed title: desk name
   const isNarrow = () => window.innerWidth <= 720;
 
   function layout(){
@@ -562,9 +586,13 @@
       ${li('高 / 低', `${nf(r.high,2)} / ${nf(r.low,2)}`)}
       ${li('距前高', uw[i]==='-' ? '—' : `<span class="${uw[i]<0?'neg':''}">${nf(uw[i],2)}%</span>`, COLORS.index)}
       ${li('成交金額', yi(r.turnoverYi), COLORS.turnover)}
-      ${li('外資買賣超', r.foreignNetYi===null?'—':`<span style="color:${r.foreignNetYi>=0?COLORS.up:COLORS.down}">${sgnYi(r.foreignNetYi,1)}</span>`,
-           r.foreignNetYi===null?null:(r.foreignNetYi>=0?COLORS.up:COLORS.down))}
-      ${li('外資累計', cumView[i]==='-' ? '—' : sgnYi(cumView[i],0), COLORS.cum)}
+      ${Object.values(DESKS).map(dk=>{
+          const v = r[dk.key];
+          const c = v===null||v===undefined ? null : (v>=0?COLORS.up:COLORS.down);
+          return li(dk.label + (DESKS[desk]===dk ? ' ●' : ''),
+            v===null||v===undefined ? '—' : `<span style="color:${c}">${sgnYi(v,1)}</span>`, c);
+        }).join('')}
+      ${li(deskName()+'累計', cumView[i]==='-' ? '—' : sgnYi(cumView[i],0), COLORS.cum)}
       ${li('融資餘額', yi(r.marginBalanceYi), COLORS.margin)}
       ${band}</div>`;
   }
@@ -602,6 +630,7 @@
     // Recompute on every render so a rotation or window resize is picked up.
     L = layout();
     uw = underwater();                       // follows the 價格基準 control
+    fgn = deskFlow();                        // follows the 法人 control
     const el = document.getElementById('chart');
     if(parseInt(el.style.height, 10) !== L.totalH){
       el.style.height = L.totalH + 'px';
@@ -612,7 +641,7 @@
       animation:false,
       textStyle:{fontFamily:'Inter, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif'},
       title: L.grids.map((g,i)=>({
-        text: i===CUM ? cumTitle() : g.name, left:L.narrow?8:14, top:g.top-19,
+        text: i===CUM ? cumTitle() : i===FLOW ? deskName()+g.name : g.name, left:L.narrow?8:14, top:g.top-19,
         textStyle:{color:COLORS.ink3, fontSize:L.narrow?10:11.5, fontWeight:500}
       })),
       grid: L.grids.map(g=>({left:L.left, right:L.right, top:g.top, height:g.height})),
@@ -664,14 +693,14 @@
           itemStyle:{color:COLORS.turnover, borderRadius:[2,2,0,0]}, barMaxWidth:6,
           markArea: markAreaFor(episodes, false) },
 
-        { name:'外資買賣超', type:'bar', data:fgn, xAxisIndex:3, yAxisIndex:3,
+        { name:deskName()+'買賣超', type:'bar', data:fgn, xAxisIndex:FLOW, yAxisIndex:FLOW,
           itemStyle:{ borderRadius:[2,2,0,0],
             color:p => (p.value>=0 ? COLORS.up : COLORS.down) }, barMaxWidth:6,
           markLine:{silent:true, symbol:'none', data:[{yAxis:0}],
             lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}},
           markArea: markAreaFor(episodes, false) },
 
-        { name:'外資累計買賣超', type:'line', data:cumView, xAxisIndex:CUM, yAxisIndex:CUM,
+        { name:deskName()+'累計買賣超', type:'line', data:cumView, xAxisIndex:CUM, yAxisIndex:CUM,
           showSymbol:false, symbolSize:8, lineStyle:{width:2, color:COLORS.cum},
           areaStyle:{color:alpha(COLORS.cum,.10)},
           markLine:{silent:true, symbol:'none', data:[{yAxis:0}],
@@ -961,6 +990,9 @@
   segHandler('seg-mode',      v=>{ mode = v; });
   segHandler('seg-split',     v=>{ splitRebound = v==='newhigh' ? null : parseFloat(v); });
   segHandler('seg-tol',       v=>{ recoverTol = parseFloat(v); });
+  // Switching desk changes only what the two flow panels plot — the episodes,
+  // the table and the selection are all unaffected, so skip the full recompute.
+  segHandler('seg-desk',      v=>{ desk = v; cumView = buildCum(cumBase); }, renderChart);
   // Switching line/candlestick doesn't change which episodes exist, so only the
   // chart is rebuilt — the table, the selection and the zoom all stay put.
   segHandler('seg-chart',     v=>{ chartType = v; }, renderChart);
@@ -986,7 +1018,8 @@
       // Partial merge: only series 3's data and its title change, so there is no
       // need to rebuild every grid while the user is still dragging.
       chart.setOption({
-        title: NAMES.map((n,i)=>({text: i===CUM ? cumTitle() : n})),
+        title: NAMES.map((n,i)=>({text: i===CUM ? cumTitle()
+                                          : i===FLOW ? deskName()+n : n})),
         series: NAMES.map((_,i)=> i===CUM ? {data: cumView} : {})
       });
     }, 120);

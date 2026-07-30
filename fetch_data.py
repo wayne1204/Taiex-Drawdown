@@ -317,36 +317,62 @@ def fetch_turnover_month(ym, rebuild_only=False):
     return out
 
 
-def fetch_foreign_day(ymd, rebuild_only=False):
+def desk_of(name):
+    """
+    Which of the three institutional desks a BFI82U row belongs to, or None for
+    rows we do not aggregate (the 合計 total line).
+
+    Order matters. TWSE ships five rows:
+
+        自營商(自行買賣)  自營商(避險)  投信
+        外資及陸資(不含外資自營商)      外資自營商      合計
+
+    "外資自營商" contains BOTH tokens, and it is foreign money - so the foreign
+    test has to run first, or the foreign dealer desk would be double-counted
+    into the domestic dealer bucket. Each side's two rows are summed, which is
+    the market convention for quoting either figure.
+    """
+    if "外資" in name:
+        return "foreign"
+    if "投信" in name:
+        return "trust"
+    if "自營商" in name:
+        return "dealer"
+    return None
+
+
+def fetch_institutions_day(ymd, rebuild_only=False):
     """
     Institutional trading. Columns: desk, buy, sell, net (all in NT dollars).
 
-    TWSE reports foreign flow as two rows - foreign investors excluding their
-    own dealer desks, plus the foreign dealer desks themselves - and the market
-    convention sums both. (The spec said this split began in 2022; it is in fact
-    present at least as far back as 2019-01, verified against the raw response.)
-    Matching on "contains the foreign-investor token" sums whatever combination
-    of those rows a given era uses, and excludes the domestic dealer/trust rows.
+    Returns net flow per desk in NT$100M, e.g.
+    {"foreignNetYi": -483.12, "trustNetYi": 139.97, "dealerNetYi": -152.27}.
+    A desk absent from the response is absent from the dict rather than 0 -
+    "no row" and "flat on the day" are different facts.
+
+    (The spec said the foreign split began in 2022; it is in fact present at
+    least as far back as 2019-01, verified against the raw response.)
     """
     p = fetch("BFI82U", "fund/BFI82U",
               {"dayDate": ymd, "type": "day", "response": "json"}, ymd, rebuild_only)
     rows = rows_of(p)
     if not rows:
         return None
-    total = None
+    totals = {}
     for row in rows:
         if len(row) < 4:
             continue
-        name = str(row[0])
-        if "外資" not in name:          # TWSE row label: foreign investors
+        desk = desk_of(str(row[0]))
+        if desk is None:
             continue
         v = parse_num(row[3])
         if v is None:
             continue
-        total = v if total is None else total + v
-    if total is None:
+        totals[desk] = totals.get(desk, 0) + v
+    if not totals:
         return None
-    return round(total / 1e8, 2)  # NT dollars -> NT$100M
+    return {f"{d}NetYi": round(v / 1e8, 2)      # NT dollars -> NT$100M
+            for d, v in totals.items()}
 
 
 def fetch_margin_day(ymd, rebuild_only=False):
@@ -430,12 +456,12 @@ def main():
     else:
         print("\n[2/3] Foreign net + margin balance (daily queries, rebuild mode)")
 
-    foreign, margin = {}, {}
+    flows, margin = {}, {}
     for i, d in enumerate(trading_days, 1):
         ymd = d.replace("-", "")
-        f = fetch_foreign_day(ymd, args.rebuild)
+        f = fetch_institutions_day(ymd, args.rebuild)
         if f is not None:
-            foreign[d] = f
+            flows[d] = f
         m = fetch_margin_day(ymd, args.rebuild)
         if m is not None:
             margin[d] = m
@@ -443,7 +469,7 @@ def main():
             pct = i / len(trading_days) * 100
             el = (time.time() - t0) / 60
             print(f"  {d}  {i}/{len(trading_days)} ({pct:.0f}%)  "
-                  f"foreign {len(foreign)} / margin {len(margin)}  {el:.1f} min elapsed",
+                  f"flows {len(flows)} / margin {len(margin)}  {el:.1f} min elapsed",
                   flush=True)
 
     # --- Stage 3: merge and write -------------------------------------------
@@ -464,7 +490,8 @@ def main():
             "date": d,
             "open": k["open"], "high": k["high"], "low": k["low"], "close": k["close"],
             "turnoverYi": t.get("turnoverYi"),
-            "foreignNetYi": foreign.get(d),
+            **{k: flows.get(d, {}).get(k)
+               for k in ("foreignNetYi", "trustNetYi", "dealerNetYi")},
             "marginBalanceYi": m.get("marginBalanceYi"),
         })
 
@@ -491,6 +518,8 @@ def main():
         "coverage": {
             "turnover": sum(1 for r in merged if r["turnoverYi"] is not None),
             "foreign": sum(1 for r in merged if r["foreignNetYi"] is not None),
+            "trust": sum(1 for r in merged if r["trustNetYi"] is not None),
+            "dealer": sum(1 for r in merged if r["dealerNetYi"] is not None),
             "margin": sum(1 for r in merged if r["marginBalanceYi"] is not None),
         },
     }
