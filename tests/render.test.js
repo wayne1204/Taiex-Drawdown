@@ -312,6 +312,41 @@ module.exports = {
           `candle span ${spanOf(zoomedCandle).toFixed(0)} → line span ${spanOf(zoomedLine).toFixed(0)}`);
         t.eq("chart-type toggle flips back to line", typeOfMain(), "line");
 
+        // ── Current-episode context strip ───────────────────────────────────
+        // The KPI row states the live drawdown; this section is what makes it
+        // mean anything. Its ranks must be derived from the same episode list
+        // the table shows, or the page contradicts itself.
+        {
+          const ctx = doc.getElementById("ctx");
+          t.ok("context section is shown while a correction is open",
+            ctx && !ctx.hidden, ctx ? `hidden=${ctx.hidden}` : "missing");
+
+          const ctxRows = [...ctx.querySelectorAll(".ctx-row")];
+          t.eq("one strip per tracked metric", ctxRows.length, 5);
+
+          const eps = window.TaiexDetect.detectEpisodes(
+            window.TAIEX_DATA, 0.07, "close", { tol: 0.03 });
+          const open = eps.find(e => e.status === "ongoing");
+          t.ok("the detection really does have an open episode", !!open,
+            open ? `${open.peakDate} → ${open.troughDate}` : "none");
+
+          t.ok("every strip plots one dot per episode and marks exactly one",
+            ctxRows.every(r => r.querySelectorAll(".ctx-dot").length === eps.length &&
+                               r.querySelectorAll(".ctx-dot.on").length === 1),
+            ctxRows.map(r => r.querySelectorAll(".ctx-dot").length).join("/"));
+
+          // Rank shown for 跌幅 must equal the count of deeper episodes, +1.
+          const deeper = eps.filter(e => e.drawdownPct < open.drawdownPct).length;
+          const rankText = ctxRows[0].querySelector(".ctx-r").textContent;
+          t.ok("跌幅 rank counts the episodes that went deeper",
+            rankText.includes(`第 ${deeper + 1} `) && rankText.includes(`共 ${eps.length} `),
+            `${rankText.trim()} (deeper: ${deeper})`);
+
+          t.ok("caption warns the open episode's figures are still accruing",
+            /仍在累積/.test(ctx.querySelector(".ctx-sub").textContent),
+            ctx.querySelector(".ctx-sub").textContent.trim().slice(-24));
+        }
+
         // ── Drawdown curve agrees with the table ────────────────────────────
         // The curve exists to show the same number the table reports, as a
         // continuous series. If its trough inside an episode's window differed

@@ -85,6 +85,29 @@
   .legend span{display:inline-flex;align-items:center;gap:6px}
   .dot{width:9px;height:9px;border-radius:2px;display:inline-block}
 
+  /* ── Current-episode context ─────────────
+     One strip per metric: every episode is a dot, the open one is filled. Two
+     visual classes, not one per episode — identity comes from the row label and
+     the printed value, never from a hue. */
+  .ctx{background:var(--surface);border:1px solid var(--line);border-radius:10px;
+    padding:14px 16px 6px;margin-bottom:20px}
+  .ctx-head{display:flex;justify-content:space-between;align-items:baseline;
+    gap:12px;flex-wrap:wrap;margin-bottom:12px}
+  .ctx-sub{color:var(--ink-3);font-size:12px}
+  .ctx-row{display:grid;grid-template-columns:96px 1fr 104px 96px;gap:12px;
+    align-items:center;padding:7px 0;border-bottom:1px solid var(--line-2)}
+  .ctx-row:last-child{border-bottom:0}
+  .ctx-k{color:var(--ink-3);font-size:12px}
+  .ctx-strip{position:relative;height:16px}
+  .ctx-strip::before{content:"";position:absolute;left:0;right:0;top:7px;height:1px;
+    background:var(--line)}
+  .ctx-dot{position:absolute;top:4px;width:8px;height:8px;margin-left:-4px;
+    border-radius:50%;background:var(--ink-4)}
+  .ctx-dot.on{width:12px;height:12px;top:2px;margin-left:-6px;background:var(--c-cum);
+    box-shadow:0 0 0 2px var(--surface)}
+  .ctx-v{text-align:right;font-size:13px}
+  .ctx-r{color:var(--ink-3);font-size:11.5px;text-align:right;white-space:nowrap}
+
   /* ── Table ──────────────────────────────── */
   .table-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;gap:12px;flex-wrap:wrap}
   h2{font-size:15px;font-weight:600;margin:0}
@@ -235,6 +258,9 @@
 
   <div id="app" hidden>
     <div class="kpis" id="kpis"></div>
+
+    <!-- Populated only while a correction is open; hidden otherwise. -->
+    <section class="ctx" id="ctx" hidden></section>
 
     <div class="table-head">
       <h2>修正波段明細</h2>
@@ -697,6 +723,61 @@
     }).join('');
   }
 
+  // ── Current-episode context ───────────────────────────────
+  // "Is this one bad?" is the question the KPI row cannot answer: -16% means
+  // nothing without knowing that four past corrections went deeper. Each metric
+  // gets a strip showing every episode's value, with the open one marked, plus
+  // its rank. The ongoing figures are still accruing — a 27-day-old decline has
+  // not finished being 27 days long — so the caption says so rather than letting
+  // the comparison read as like-for-like.
+  const CTX = [
+    {k:'drawdownPct',    t:'跌幅',       fmt:v=>sgn(v,2)+'%',  sup:'深', low:true},
+    {k:'declineDays',    t:'下跌天數',   fmt:v=>nf(v,0)+' 日', sup:'長', low:false},
+    {k:'foreignSumYi',   t:'外資買賣超', fmt:v=>sgnYi(v,0),    sup:'多', low:true},
+    {k:'marginChgPct',   t:'融資變化',   fmt:v=>sgn(v,1)+'%',  sup:'深', low:true},
+    {k:'killRatio',      t:'融資殺盤幅度', fmt:v=>nf(v,2),     sup:'高', low:false}
+  ];
+
+  function renderContext(){
+    const box = document.getElementById('ctx');
+    const cur = episodes.find(e=>e.status==='ongoing');
+    if(!cur){ box.hidden = true; box.innerHTML = ''; return; }
+    box.hidden = false;
+
+    const rowsHtml = CTX.map(c=>{
+      const vals = episodes.map(e=>e[c.k]).filter(v=>v!==null && v!==undefined);
+      const v = cur[c.k];
+      if(v===null || v===undefined || vals.length < 2){
+        return `<div class="ctx-row"><div class="ctx-k">${c.t}</div>
+          <div class="ctx-strip"></div><div class="ctx-v num">—</div>
+          <div class="ctx-r">資料不足</div></div>`;
+      }
+      const lo = Math.min(...vals), hi = Math.max(...vals);
+      const pos = x => hi===lo ? 50 : (x-lo)/(hi-lo)*100;
+      // rank 1 = most extreme in the direction the label names
+      const rank = vals.filter(x=> c.low ? x < v : x > v).length + 1;
+      const dots = episodes.map(e=>{
+        const x = e[c.k];
+        if(x===null || x===undefined) return '';
+        const on = e===cur;
+        return `<i class="ctx-dot${on?' on':''}" style="left:${pos(x).toFixed(1)}%"${
+          on ? '' : ` title="${fd(e.peakDate)}"`}></i>`;
+      }).join('');
+      return `<div class="ctx-row">
+        <div class="ctx-k">${c.t}</div>
+        <div class="ctx-strip">${dots}</div>
+        <div class="ctx-v num">${c.fmt(v)}</div>
+        <div class="ctx-r">第 ${rank} ${c.sup} / 共 ${vals.length} 波</div>
+      </div>`;
+    }).join('');
+
+    box.innerHTML = `<div class="ctx-head">
+        <h2>目前波段定位</h2>
+        <span class="ctx-sub">自 ${fd(cur.peakDate)} 高點起算，已 ${nf(cur.declineDays,0)} 個交易日 ·
+          數值仍在累積中，與已收復波段並非等長比較</span>
+      </div>${rowsHtml}`;
+  }
+
   // ── Table ─────────────────────────────────────────────────
   const COLS = [
     {k:'idx',   t:'#',            f:(e,i)=>i+1, txt:false},
@@ -954,7 +1035,7 @@
     selected = -1;
     zoomRange = null;
     setCumBase(0);
-    renderKpis(); renderChart(); renderTable();
+    renderKpis(); renderContext(); renderChart(); renderTable();
   }
 
   const cov = META.coverage || {};
