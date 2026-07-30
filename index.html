@@ -385,6 +385,31 @@
   // full range every time the chart is rebuilt.
   let zoomRange = null;   // null = show everything
 
+  // Running drawdown: how far below the highest level seen so far the market is,
+  // on the same price basis (盤中高低 / 收盤價) the episode detection uses.
+  //
+  // The peak here is the true running maximum and never ratchets down. Under a
+  // non-zero 收復認定 tolerance the table's 跌幅 is measured from a lower high
+  // that was accepted as a recovery, so this curve reads DEEPER than the table
+  // for those episodes — e.g. 2025-02 shows -28.69% here against -26.71% there.
+  // That is the honest reading of "how far below the prior peak": ratcheting the
+  // peak down to match would stop it being a drawdown curve. Under 嚴格 the two
+  // agree exactly, which the render suite asserts.
+  function underwater(){
+    const HI = i => mode==='intraday' ? rows[i].high  : rows[i].close;
+    const LO = i => mode==='intraday' ? rows[i].low   : rows[i].close;
+    let peak = -Infinity;
+    return rows.map((r,i)=>{
+      const h = HI(i), l = LO(i);
+      if(h===null || l===null || h===undefined || l===undefined) return '-';
+      if(h > peak) peak = h;
+      return peak > 0 ? +(((l - peak) / peak) * 100).toFixed(2) : '-';
+    });
+  }
+
+  // Recomputed on every render because it depends on the price basis.
+  let uw = underwater();
+
   // ECharts candlestick wants [open, close, low, high] — note that order.
   const ohlc = rows.map(r =>
     (r.open===null||r.close===null||r.low===null||r.high===null)
@@ -399,15 +424,16 @@
 
   const chart = echarts.init(document.getElementById('chart'), null, {renderer:'canvas'});
 
-  // Five stacked panels on one shared x-axis. Daily foreign net and cumulative
+  // Stacked panels on one shared x-axis. Daily foreign net and cumulative
   // foreign net live in separate panels rather than sharing one plot with two
   // y-scales — a dual-axis chart makes the crossings look meaningful when they
   // are an artifact of the scaling.
-  // Phones get the same five panels, just tighter: a 70px y-axis gutter eats a
-  // fifth of a 390px screen, and 900px of chart needs the page to scroll rather
-  // than each panel being squashed.
-  const NAMES = ['加權指數','成交金額（億元）','外資買賣超（億元）',
-                 '外資累計買賣超（億元）','融資餘額（億元）'];   // [3] overridden by cumTitle()
+  // Phones get the same panels, just tighter: a 70px y-axis gutter eats a fifth
+  // of a 390px screen, and the full stack needs the page to scroll rather than
+  // each panel being squashed.
+  const NAMES = ['加權指數','距前高回檔（%）','成交金額（億元）','外資買賣超（億元）',
+                 '外資累計買賣超（億元）','融資餘額（億元）'];
+  const CUM = 4;                 // the one panel whose title is computed, not fixed
   const isNarrow = () => window.innerWidth <= 720;
 
   function layout(){
@@ -446,13 +472,16 @@
                                 : v.slice(0,4)+'/'+v.slice(5,7)}
       : {show:false}
   });
+  const UW = 1;                   // the drawdown panel, in % rather than points
   const valCommon = i => ({
     type:'value', gridIndex:i, scale:i===0,
+    max: i===UW ? 0 : undefined,   // the curve never rises above the prior peak
     axisLine:{show:false}, axisTick:{show:false},
     splitLine:{lineStyle:{color:COLORS.line2}},
     axisLabel:{color:COLORS.ink3, fontSize:L.narrow?9:11,
       // 46px of gutter cannot hold "45,000"; abbreviate hard on narrow screens
       formatter:v=>{
+        if(i===UW) return v===0 ? '0' : nf(v,0)+'%';
         const a = Math.abs(v);
         if(a>=10000) return (v/10000).toFixed(L.narrow?0:1)+'萬';
         if(L.narrow && a>=1000) return (v/1000).toFixed(0)+'k';
@@ -505,6 +534,7 @@
       ${li('收盤', nf(r.close,2), COLORS.index)}
       ${li('漲跌', chg===null?'—':`<span style="color:${chgColor}">${sgn(chg,2)} (${sgn(chgPct,2)}%)</span>`)}
       ${li('高 / 低', `${nf(r.high,2)} / ${nf(r.low,2)}`)}
+      ${li('距前高', uw[i]==='-' ? '—' : `<span class="${uw[i]<0?'neg':''}">${nf(uw[i],2)}%</span>`, COLORS.index)}
       ${li('成交金額', yi(r.turnoverYi), COLORS.turnover)}
       ${li('外資買賣超', r.foreignNetYi===null?'—':`<span style="color:${r.foreignNetYi>=0?COLORS.up:COLORS.down}">${sgnYi(r.foreignNetYi,1)}</span>`,
            r.foreignNetYi===null?null:(r.foreignNetYi>=0?COLORS.up:COLORS.down))}
@@ -545,6 +575,7 @@
   function renderChart(){
     // Recompute on every render so a rotation or window resize is picked up.
     L = layout();
+    uw = underwater();                       // follows the 價格基準 control
     const el = document.getElementById('chart');
     if(parseInt(el.style.height, 10) !== L.totalH){
       el.style.height = L.totalH + 'px';
@@ -555,7 +586,7 @@
       animation:false,
       textStyle:{fontFamily:'Inter, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif'},
       title: L.grids.map((g,i)=>({
-        text: i===3 ? cumTitle() : g.name, left:L.narrow?8:14, top:g.top-19,
+        text: i===CUM ? cumTitle() : g.name, left:L.narrow?8:14, top:g.top-19,
         textStyle:{color:COLORS.ink3, fontSize:L.narrow?10:11.5, fontWeight:500}
       })),
       grid: L.grids.map(g=>({left:L.left, right:L.right, top:g.top, height:g.height})),
@@ -578,9 +609,9 @@
         // On touch, ECharts' inside-zoom captures one-finger drags, which would
         // hijack vertical page scrolling. Leave pinch-zoom on, panning off, and
         // let the (enlarged) slider be the deliberate way to move the window.
-        {type:'inside', xAxisIndex:[0,1,2,3,4], ...zoomOpt(), zoomOnMouseWheel:true,
+        {type:'inside', xAxisIndex:NAMES.map((_,i)=>i), ...zoomOpt(), zoomOnMouseWheel:true,
          moveOnMouseMove: !L.narrow, preventDefaultMouseMove: !L.narrow},
-        {type:'slider', xAxisIndex:[0,1,2,3,4], height:L.narrow?26:20, bottom:10, ...zoomOpt(),
+        {type:'slider', xAxisIndex:NAMES.map((_,i)=>i), height:L.narrow?26:20, bottom:10, ...zoomOpt(),
          backgroundColor:COLORS.surface, borderColor:COLORS.line, fillerColor:alpha(COLORS.turnover,.14),
          handleStyle:{color:COLORS.ink4}, moveHandleStyle:{color:COLORS.ink4},
          dataBackground:{lineStyle:{color:COLORS.zoomTrack}, areaStyle:{color:COLORS.line2}},
@@ -591,25 +622,37 @@
       series:[
         mainSeries(),
 
-        { name:'成交金額', type:'bar', data:turn, xAxisIndex:1, yAxisIndex:1,
+        // Single series, so no legend entry is needed — the panel title names it.
+        // Drawn in the index's own neutral ink rather than a new hue: it is the
+        // index re-expressed, and painting a decline in --c-up would read as a
+        // rise under this palette's Taiwan convention (red = up).
+        { name:'距前高回檔', type:'line', data:uw, xAxisIndex:UW, yAxisIndex:UW,
+          showSymbol:false, connectNulls:false,
+          lineStyle:{width:1.5, color:COLORS.index},
+          areaStyle:{color:alpha(COLORS.index,.13)},
+          markLine:{silent:true, symbol:'none', data:[{yAxis:0}],
+            lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}},
+          markArea: markAreaFor(episodes, false) },
+
+        { name:'成交金額', type:'bar', data:turn, xAxisIndex:2, yAxisIndex:2,
           itemStyle:{color:COLORS.turnover, borderRadius:[2,2,0,0]}, barMaxWidth:6,
           markArea: markAreaFor(episodes, false) },
 
-        { name:'外資買賣超', type:'bar', data:fgn, xAxisIndex:2, yAxisIndex:2,
+        { name:'外資買賣超', type:'bar', data:fgn, xAxisIndex:3, yAxisIndex:3,
           itemStyle:{ borderRadius:[2,2,0,0],
             color:p => (p.value>=0 ? COLORS.up : COLORS.down) }, barMaxWidth:6,
           markLine:{silent:true, symbol:'none', data:[{yAxis:0}],
             lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}},
           markArea: markAreaFor(episodes, false) },
 
-        { name:'外資累計買賣超', type:'line', data:cumView, xAxisIndex:3, yAxisIndex:3,
+        { name:'外資累計買賣超', type:'line', data:cumView, xAxisIndex:CUM, yAxisIndex:CUM,
           showSymbol:false, symbolSize:8, lineStyle:{width:2, color:COLORS.cum},
           areaStyle:{color:alpha(COLORS.cum,.10)},
           markLine:{silent:true, symbol:'none', data:[{yAxis:0}],
             lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}},
           markArea: markAreaFor(episodes, false) },
 
-        { name:'融資餘額', type:'line', data:mgn, xAxisIndex:4, yAxisIndex:4,
+        { name:'融資餘額', type:'line', data:mgn, xAxisIndex:5, yAxisIndex:5,
           showSymbol:false, symbolSize:8, connectNulls:false,
           lineStyle:{width:2, color:COLORS.margin},
           areaStyle:{color:alpha(COLORS.margin,.10)},
@@ -862,8 +905,8 @@
       // Partial merge: only series 3's data and its title change, so there is no
       // need to rebuild every grid while the user is still dragging.
       chart.setOption({
-        title: NAMES.map((n,i)=>({text: i===3 ? cumTitle() : n})),
-        series: [{}, {}, {}, {data: cumView}, {}]
+        title: NAMES.map((n,i)=>({text: i===CUM ? cumTitle() : n})),
+        series: NAMES.map((_,i)=> i===CUM ? {data: cumView} : {})
       });
     }, 120);
   });
