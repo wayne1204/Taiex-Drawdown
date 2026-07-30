@@ -24,6 +24,17 @@
        encoded by position above/below the zero line — color is redundant here,
        never the sole carrier of meaning. */
     --c-up:#e66767; --c-down:#1baf7a;
+
+    /* Chrome shared by the stylesheet and the ECharts options. Every colour the
+       chart draws is read from this block at runtime via C(), so a palette edit
+       here reaches the chart too — there are no colour literals in the script. */
+    --line-2:#26261f;        /* inner grid lines, card cell rules */
+    --ink-4:#4a4a44;         /* zero lines, slider handles, control borders */
+    --row-hover:#20201d; --row-sel:#2b2320;
+    --axis-pointer:#6a6a60;
+    --zoom-track:#3a3a34; --zoom-track-on:#5a5a52; --zoom-fill:#2e2e28;
+    --c-band-on:rgba(230,103,103,.30);   /* correction mask, selected episode */
+    --band-label:#ffb4b4; --band-label-off:#8a6a6a;
   }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
@@ -53,7 +64,7 @@
   .seg button[aria-pressed="true"]{background:var(--surface-2);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
   .btn{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
     padding:7px 13px;border-radius:7px;font-size:13px;cursor:pointer;font-family:inherit}
-  .btn:hover{color:var(--ink);border-color:#4a4a44}
+  .btn:hover{color:var(--ink);border-color:var(--ink-4)}
 
   /* ── KPI cards ──────────────────────────── */
   .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:12px;margin-bottom:20px}
@@ -99,10 +110,10 @@
   th:first-child,td:first-child{text-align:center}
   th.txt,td.txt{text-align:left}
   tbody tr{cursor:pointer}
-  tbody tr:hover{background:#20201d}
+  tbody tr:hover{background:var(--row-hover)}
   th button:focus-visible,tbody tr:focus-visible{
     outline:2px solid var(--c-turnover);outline-offset:-2px}
-  tbody tr[aria-selected="true"]{background:#2b2320;box-shadow:inset 3px 0 0 var(--c-up)}
+  tbody tr[aria-selected="true"]{background:var(--row-sel);box-shadow:inset 3px 0 0 var(--c-up)}
   tbody tr:last-child td{border-bottom:0}
   .neg{color:var(--c-down)}   /* Taiwan convention: green = down / net sell / decrease */
   .pos{color:var(--c-up)}     /* Taiwan convention: red = up / net buy / increase */
@@ -155,10 +166,10 @@
     tr{
       background:var(--surface);border:1px solid var(--line);border-radius:10px;
       padding:6px 12px;margin-bottom:10px}
-    tr[aria-selected="true"]{box-shadow:inset 3px 0 0 var(--c-up);background:#2b2320}
+    tr[aria-selected="true"]{box-shadow:inset 3px 0 0 var(--c-up);background:var(--row-sel)}
     td{
       display:flex;justify-content:space-between;align-items:baseline;gap:14px;
-      text-align:right;padding:5px 0;border-bottom:1px solid #26261f;white-space:normal}
+      text-align:right;padding:5px 0;border-bottom:1px solid var(--line-2);white-space:normal}
     td:last-child{border-bottom:0}
     td::before{
       content:attr(data-label);color:var(--ink-3);font-size:11.5px;
@@ -258,7 +269,7 @@
         <span><i class="dot" style="background:var(--c-down)"></i>外資賣超</span>
         <span><i class="dot" style="background:var(--c-cum)"></i>外資累計買賣超</span>
         <span><i class="dot" style="background:var(--c-margin)"></i>融資餘額</span>
-        <span><i class="dot" style="background:rgba(230,103,103,.30)"></i>修正區間</span>
+        <span><i class="dot" style="background:var(--c-band-on)"></i>修正區間</span>
       </div>
     </div>
 
@@ -288,8 +299,20 @@
     index:C('--c-index'), turnover:C('--c-turnover'), cum:C('--c-cum'),
     margin:C('--c-margin'), up:C('--c-up'), down:C('--c-down'),
     ink:C('--ink'), ink2:C('--ink-2'), ink3:C('--ink-3'),
-    line:C('--line'), surface:C('--surface')
+    line:C('--line'), line2:C('--line-2'), surface:C('--surface'),
+    ink4:C('--ink-4'), pointer:C('--axis-pointer'), bandOn:C('--c-band-on'),
+    bandLabel:C('--band-label'), bandLabelOff:C('--band-label-off'),
+    zoomTrack:C('--zoom-track'), zoomTrackOn:C('--zoom-track-on'), zoomFill:C('--zoom-fill')
   };
+  // rgba() from one of the hex vars above, so a tint stays tied to its source
+  // colour instead of being restated as a literal that silently goes stale.
+  const alpha = (hex, a) => {
+    const h = hex.replace('#','');
+    const n = parseInt(h.length===3 ? h.split('').map(c=>c+c).join('') : h, 16);
+    return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+  };
+  // The correction mask, at its three weights.
+  const BAND = {main:alpha(COLORS.up,.13), sub:alpha(COLORS.up,.09), on:COLORS.bandOn};
 
   // ── Data loading ──────────────────────────────────────────
   const rows = window.TAIEX_DATA;
@@ -395,7 +418,7 @@
     const top0   = narrow ? 28  : 34;
     const grids = [];
     let top = top0;
-    for(let i=0;i<5;i++){
+    for(let i=0;i<NAMES.length;i++){
       const h = i===0 ? mainH : subH;
       grids.push({name:NAMES[i], top, height:h});
       top += h + gap;
@@ -408,15 +431,14 @@
     };
   }
   let L = layout();
-  const GRIDS = L.grids;                   // kept for the partial-merge title patch
-  const LAST = 4;
+  const LAST = NAMES.length - 1;
 
   const axisCommon = i => ({
     type:'category', data:dates, gridIndex:i, boundaryGap:false,
     axisLine:{lineStyle:{color:COLORS.line}},
     axisTick:{show:false},
     splitLine:{show:false},
-    axisPointer:{show:true, label:{show:i===LAST, backgroundColor:'#33332e', color:COLORS.ink}},
+    axisPointer:{show:true, label:{show:i===LAST, backgroundColor:COLORS.line, color:COLORS.ink}},
     axisLabel: i===LAST
       ? {color:COLORS.ink3, fontSize:L.narrow?9:11, hideOverlap:true,
          // On a phone there is no room for YYYY/MM on every tick
@@ -427,7 +449,7 @@
   const valCommon = i => ({
     type:'value', gridIndex:i, scale:i===0,
     axisLine:{show:false}, axisTick:{show:false},
-    splitLine:{lineStyle:{color:'#26261f'}},
+    splitLine:{lineStyle:{color:COLORS.line2}},
     axisLabel:{color:COLORS.ink3, fontSize:L.narrow?9:11,
       // 46px of gutter cannot hold "45,000"; abbreviate hard on narrow screens
       formatter:v=>{
@@ -441,15 +463,15 @@
   function markAreaFor(eps, main){
     return {
       silent:true,
-      itemStyle:{color: main ? 'rgba(230,103,103,0.13)' : 'rgba(230,103,103,0.09)'},
+      itemStyle:{color: main ? BAND.main : BAND.sub},
       emphasis:{disabled:true},
       data: eps.map((e,i)=>{
         const on = i===selected;
         return [
           {xAxis:e.peakDate,
-           itemStyle:{color: on ? 'rgba(230,103,103,0.30)' : (main?'rgba(230,103,103,0.13)':'rgba(230,103,103,0.09)')},
+           itemStyle:{color: on ? BAND.on : (main ? BAND.main : BAND.sub)},
            label: main ? {show:true, formatter:'#'+(i+1), position:'insideTop',
-                          color: on?'#ffb4b4':'#8a6a6a', fontSize:10} : {show:false}},
+                          color: on ? COLORS.bandLabel : COLORS.bandLabelOff, fontSize:10} : {show:false}},
           {xAxis:e.troughDate}
         ];
       })
@@ -462,8 +484,8 @@
     if(!r) return '';
     const li = (label,val,color)=>
       `<div style="display:flex;justify-content:space-between;gap:18px;line-height:1.65">
-         <span style="color:#8a897e">${color?`<i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:6px"></i>`:''}${label}</span>
-         <span style="font-variant-numeric:tabular-nums;color:#f0efec">${val}</span>
+         <span style="color:${COLORS.ink3}">${color?`<i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:6px"></i>`:''}${label}</span>
+         <span style="font-variant-numeric:tabular-nums;color:${COLORS.ink}">${val}</span>
        </div>`;
     const chg = i>0 && r.close!==null && rows[i-1].close!==null ? r.close-rows[i-1].close : null;
     const chgPct = (chg!==null && rows[i-1].close) ? chg/rows[i-1].close*100 : null;
@@ -475,11 +497,11 @@
     if(k>=0){
       const e=episodes[k];
       const phase = i<=e.troughIdx ? '下跌中' : '收復中';
-      band = `<div style="margin-top:7px;padding-top:6px;border-top:1px solid #33332e;color:#c98500;font-size:11.5px">
+      band = `<div style="margin-top:7px;padding-top:6px;border-top:1px solid ${COLORS.line};color:${COLORS.cum};font-size:11.5px">
                 修正 #${k+1} · ${phase} · 波段跌幅 ${e.drawdownPct.toFixed(2)}%</div>`;
     }
     return `<div style="min-width:230px;font-size:12.5px">
-      <div style="color:#f0efec;font-weight:600;margin-bottom:6px">${fd(r.date)}</div>
+      <div style="color:${COLORS.ink};font-weight:600;margin-bottom:6px">${fd(r.date)}</div>
       ${li('收盤', nf(r.close,2), COLORS.index)}
       ${li('漲跌', chg===null?'—':`<span style="color:${chgColor}">${sgn(chg,2)} (${sgn(chgPct,2)}%)</span>`)}
       ${li('高 / 低', `${nf(r.high,2)} / ${nf(r.low,2)}`)}
@@ -517,7 +539,7 @@
       showSymbol:false, symbol:'circle', symbolSize:8, connectNulls:false,
       lineStyle:{width:2, color:COLORS.index},
       areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[
-        {offset:0,color:'rgba(195,194,183,.14)'},{offset:1,color:'rgba(195,194,183,0)'}])} };
+        {offset:0,color:alpha(COLORS.index,.14)},{offset:1,color:alpha(COLORS.index,0)}])} };
   }
 
   function renderChart(){
@@ -537,16 +559,16 @@
         textStyle:{color:COLORS.ink3, fontSize:L.narrow?10:11.5, fontWeight:500}
       })),
       grid: L.grids.map(g=>({left:L.left, right:L.right, top:g.top, height:g.height})),
-      xAxis: GRIDS.map((_,i)=>axisCommon(i)),
-      yAxis: GRIDS.map((_,i)=>valCommon(i)),
+      xAxis: NAMES.map((_,i)=>axisCommon(i)),
+      yAxis: NAMES.map((_,i)=>valCommon(i)),
       axisPointer:{
         link:[{xAxisIndex:'all'}],
-        lineStyle:{color:'#6a6a60', width:1, type:'dashed'},
-        label:{backgroundColor:'#33332e'}
+        lineStyle:{color:COLORS.pointer, width:1, type:'dashed'},
+        label:{backgroundColor:COLORS.line}
       },
       tooltip:{
         trigger:'axis', axisPointer:{type:'cross'},
-        backgroundColor:'rgba(26,26,25,.97)', borderColor:'#33332e', borderWidth:1,
+        backgroundColor:alpha(COLORS.surface,.97), borderColor:COLORS.line, borderWidth:1,
         padding:L.narrow?[8,9]:[10,12], confine:true,
         extraCssText:'backdrop-filter:blur(4px);border-radius:8px;max-width:88vw',
         textStyle:{color:COLORS.ink, fontSize:L.narrow?11:12.5},
@@ -559,10 +581,10 @@
         {type:'inside', xAxisIndex:[0,1,2,3,4], ...zoomOpt(), zoomOnMouseWheel:true,
          moveOnMouseMove: !L.narrow, preventDefaultMouseMove: !L.narrow},
         {type:'slider', xAxisIndex:[0,1,2,3,4], height:L.narrow?26:20, bottom:10, ...zoomOpt(),
-         backgroundColor:'#1a1a19', borderColor:'#33332e', fillerColor:'rgba(57,135,229,.14)',
-         handleStyle:{color:'#4a4a44'}, moveHandleStyle:{color:'#4a4a44'},
-         dataBackground:{lineStyle:{color:'#3a3a34'}, areaStyle:{color:'#26261f'}},
-         selectedDataBackground:{lineStyle:{color:'#5a5a52'}, areaStyle:{color:'#2e2e28'}},
+         backgroundColor:COLORS.surface, borderColor:COLORS.line, fillerColor:alpha(COLORS.turnover,.14),
+         handleStyle:{color:COLORS.ink4}, moveHandleStyle:{color:COLORS.ink4},
+         dataBackground:{lineStyle:{color:COLORS.zoomTrack}, areaStyle:{color:COLORS.line2}},
+         selectedDataBackground:{lineStyle:{color:COLORS.zoomTrackOn}, areaStyle:{color:COLORS.zoomFill}},
          textStyle:{color:COLORS.ink3, fontSize:10},
          labelFormatter: v => dates[Math.round(v)] ? dates[Math.round(v)].slice(0,7) : ''}
       ],
@@ -577,20 +599,20 @@
           itemStyle:{ borderRadius:[2,2,0,0],
             color:p => (p.value>=0 ? COLORS.up : COLORS.down) }, barMaxWidth:6,
           markLine:{silent:true, symbol:'none', data:[{yAxis:0}],
-            lineStyle:{color:'#4a4a44', width:1}, label:{show:false}},
+            lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}},
           markArea: markAreaFor(episodes, false) },
 
         { name:'外資累計買賣超', type:'line', data:cumView, xAxisIndex:3, yAxisIndex:3,
           showSymbol:false, symbolSize:8, lineStyle:{width:2, color:COLORS.cum},
-          areaStyle:{color:'rgba(201,133,0,.10)'},
+          areaStyle:{color:alpha(COLORS.cum,.10)},
           markLine:{silent:true, symbol:'none', data:[{yAxis:0}],
-            lineStyle:{color:'#4a4a44', width:1}, label:{show:false}},
+            lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}},
           markArea: markAreaFor(episodes, false) },
 
         { name:'融資餘額', type:'line', data:mgn, xAxisIndex:4, yAxisIndex:4,
           showSymbol:false, symbolSize:8, connectNulls:false,
           lineStyle:{width:2, color:COLORS.margin},
-          areaStyle:{color:'rgba(144,133,233,.10)'},
+          areaStyle:{color:alpha(COLORS.margin,.10)},
           markArea: markAreaFor(episodes, false) }
       ]
     };
@@ -665,7 +687,7 @@
         const t = Math.max(0, Math.min(1,(e.killRatio-0.4)/1.8));
         const a = (0.06 + t*0.46).toFixed(2);
         const strong = e.killRatio>=1.5;
-        return `<span class="ratio num" style="background:rgba(57,135,229,${a});${strong?'box-shadow:inset 0 0 0 1px rgba(57,135,229,.7)':''}">${e.killRatio.toFixed(2)}</span>`;
+        return `<span class="ratio num" style="background:${alpha(COLORS.turnover,a)};${strong?`box-shadow:inset 0 0 0 1px ${alpha(COLORS.turnover,.7)}`:''}">${e.killRatio.toFixed(2)}</span>`;
       }}
   ];
 
@@ -840,7 +862,7 @@
       // Partial merge: only series 3's data and its title change, so there is no
       // need to rebuild every grid while the user is still dragging.
       chart.setOption({
-        title: GRIDS.map((g,i)=>({text: i===3 ? cumTitle() : g.name})),
+        title: NAMES.map((n,i)=>({text: i===3 ? cumTitle() : n})),
         series: [{}, {}, {}, {data: cumView}, {}]
       });
     }, 120);
@@ -869,10 +891,13 @@
     const blob = new Blob(['﻿'+[head.join(','),...body].join('\n')],
       {type:'text/csv;charset=utf-8'});
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
+    a.href = url;
     a.download = `taiex-corrections-${(threshold*100).toFixed(0)}pct-${mode}.csv`;
     a.click();
-    URL.revokeObjectURL(a.href);
+    // Revoking in the same tick races the download in Firefox — the URL can be
+    // dead before the browser has read the blob. Yield first.
+    setTimeout(()=>URL.revokeObjectURL(url), 0);
   });
 
   // ── Recompute ─────────────────────────────────────────────
