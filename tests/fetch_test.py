@@ -366,7 +366,7 @@ class TestFetchMarginDay(NetworkGuardedTestCase):
     def test_known_margin_balance_20260729(self):
         result = fetch_data.fetch_margin_day("20260729", rebuild_only=True)
         self.assertIsInstance(result, dict)
-        self.assertEqual(set(result.keys()), {"marginBalanceYi", "shortBalanceUnits"})
+        self.assertEqual(set(result.keys()), {"marginBalanceYi"})
         self.assertAlmostEqual(result["marginBalanceYi"], 5070.11)
 
     def test_known_margin_balance_20260717(self):
@@ -381,9 +381,11 @@ class TestFetchMarginDay(NetworkGuardedTestCase):
         self.assertAlmostEqual(result["marginBalanceYi"], expected)
         self.assertEqual(expected, 5070.11)
 
-    def test_short_balance_units_present(self):
+    def test_short_balance_is_not_carried_into_the_output(self):
+        # The raw response has a 融券 row; nothing downstream reads it, so the
+        # parser must not smuggle it into the merged series.
         result = fetch_data.fetch_margin_day("20260717", rebuild_only=True)
-        self.assertAlmostEqual(result["shortBalanceUnits"], 236300.0)
+        self.assertNotIn("shortBalanceUnits", result)
 
     def test_missing_cache_returns_none_not_exception(self):
         result = fetch_data.fetch_margin_day("19900101", rebuild_only=True)

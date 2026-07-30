@@ -353,30 +353,26 @@ def fetch_margin_day(ymd, rebuild_only=False):
     """
     Margin & short statistics (selectType=MS).
     Columns: item, buy, sell, cash redemption, prev balance, today's balance.
-    We need today's margin balance in NT$ thousands; the short balance is kept
-    alongside it for reference.
+    We need today's margin balance in NT$ thousands.
+
+    The short balance on the same row set is deliberately not carried into the
+    merged output: nothing consumes it. The raw responses are cached under
+    data/raw/MI_MARGN/, so adding it back is a two-line change plus --rebuild.
     """
     p = fetch("MI_MARGN", "marginTrading/MI_MARGN",
               {"date": ymd, "selectType": "MS", "response": "json"}, ymd, rebuild_only)
     rows = rows_of(p)
     if not rows:
         return None
-    margin_yi = None
-    short_units = None
     for row in rows:
         if len(row) < 6:
             continue
-        item = str(row[0])
-        today_bal = parse_num(row[5])
-        if today_bal is None:
+        if "融資金額" not in str(row[0]):      # margin balance, NT$ thousands
             continue
-        if "融資金額" in item:                        # margin balance, NT$ thousands
-            margin_yi = round(today_bal / 1e5, 2)     # NT$ thousands -> NT$100M
-        elif "融券" in item and "單位" in item:        # short balance, in lots
-            short_units = today_bal
-    if margin_yi is None:
-        return None
-    return {"marginBalanceYi": margin_yi, "shortBalanceUnits": short_units}
+        today_bal = parse_num(row[5])
+        if today_bal is not None:
+            return {"marginBalanceYi": round(today_bal / 1e5, 2)}   # 仟元 -> 億元
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -470,7 +466,6 @@ def main():
             "turnoverYi": t.get("turnoverYi"),
             "foreignNetYi": foreign.get(d),
             "marginBalanceYi": m.get("marginBalanceYi"),
-            "shortBalanceUnits": m.get("shortBalanceUnits"),
         })
 
     # Fold this run's range into whatever the previous run wrote. --start names

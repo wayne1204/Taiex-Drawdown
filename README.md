@@ -1,6 +1,6 @@
 # TAIEX Drawdown Atlas · 台股大盤修正波段分析
 
-自 2021 年以來加權指數的每一次修正波段，用峰谷法偵測出來，再疊上三個真正有意義的
+自 2019 年以來加權指數的每一次修正波段，用峰谷法偵測出來，再疊上三個真正有意義的
 籌碼指標：成交金額、外資買賣超、融資餘額。
 
 資料全部來自臺灣證券交易所公開 endpoint，免金鑰、免付費。**不使用任何模擬資料**：
@@ -27,12 +27,19 @@ xdg-open index.html       # 或直接雙擊開啟
 python3 -m http.server 8000   # 然後開 http://localhost:8000
 ```
 
-ECharts 由 CDN 載入，因此第一次開啟需要網路連線。
+ECharts 由 CDN 載入，因此第一次開啟需要網路連線。要完全離線（例如丟到手機上看），
+用 `python3 bundle.py` 產生 `dist/taiex-atlas-standalone.html`：ECharts、資料與
+`detect.js` 全部內嵌，單一檔案、零外部請求。`dist/` 不進版控，改完 `index.html`
+記得重打包——`tests/bundle.test.js` 會在過期時報錯。
 
 ## 抓取腳本
 
 `fetch_data.py` 可重複執行且為增量式。每一筆原始回應都快取在 `data/raw/<endpoint>/`
 底下，命中快取就**完全不發送請求**——所以第二次執行只需數秒，且只會補抓新的交易日。
+
+唯二的例外是「還沒定案」的快取：**當月**的月查詢（每收盤一次就多一列）與**近五天**
+被標記為無資料的單日查詢（證交所收盤後數小時才發佈，跑太早會把「無資料」永久凍結）。
+這兩種會自動重抓；重抓失敗時沿用舊快取，不會讓整段資料憑空消失。
 
 | 資料來源 | Endpoint | 查詢單位 |
 |---|---|---|
@@ -43,7 +50,7 @@ ECharts 由 CDN 載入，因此第一次開啟需要網路連線。
 
 下面兩支就是冷啟動要跑一個多小時的原因。證交所只提供單日查詢：沒有月彙總版本，而
 TWSE OpenAPI 目錄裡的對應資源完全沒有日期參數（只回傳最近一個交易日）。因此這兩支
-只能逐交易日走過去，約 2,700 次請求。請求間隔約 1.6–2.0 秒並實作指數退避重試；
+只能逐交易日走過去，約 3,700 次請求。請求間隔約 1.6–2.0 秒並實作指數退避重試；
 **把 sleep 拿掉只會換來 429 與 HTML 維護頁，不會比較快**。
 
 過程中一併處理掉的坑：
@@ -66,7 +73,12 @@ TWSE OpenAPI 目錄裡的對應資源完全沒有日期參數（只回傳最近�
 ```bash
 python3 fetch_data.py --start 2024-01     # 只補某段區間
 python3 fetch_data.py --rebuild           # 純用快取重建輸出檔，零請求
+python3 bundle.py                         # 打包成單一離線 HTML
 ```
+
+`--start` 指的是**要抓的範圍**，不是要保留的範圍：新抓到的日期會併回既有的
+`data/taiex-daily.json`，範圍外的日子原封不動保留。真要縮短序列請直接刪掉輸出檔
+再重抓。
 
 ## 修正波段偵測演算法
 
@@ -262,12 +274,14 @@ npm test                     # 同 node tests/run.js
 
 | 套件 | 測什麼 | 斷言數 | 需要 |
 |---|---|---|---|
-| `tests/detect.test.js` | 演算法規則，跑在手工序列上 | 66 | 無 |
+| `tests/detect.test.js` | 演算法規則，跑在手工序列上 | 111 | 無 |
 | `tests/fetch_test.py` | `fetch_data.py` 的解析與快取邏輯 | 63 | Python 3 |
-| `tests/render.test.js` | 在 headless DOM 中實際執行 `index.html` | 45 | `npm i` |
-| `verify.js` | 真實資料完整性與驗收條件 | 32 | 已抓好的資料 |
+| `tests/render.test.js` | 在 headless DOM 中實際執行 `index.html` | 61 | `npm i` |
+| `tests/bundle.test.js` | `dist/` 是否落後於 `index.html` / 資料 | 4 | 已打包的 `dist/` |
+| `verify.js` | 真實資料完整性與驗收條件 | 47 | 已抓好的資料 |
 
-全部通過時為 **113 passed · 0 failed · 0 skipped**（`verify.js` 在執行器中計為一個套件）。
+全部通過時為 **178 passed · 0 failed · 0 skipped**（`verify.js` 與 `fetch_test.py`
+在執行器中各計為一個套件，內部斷言數如上表）。
 
 `tests/detect.test.js` **完全不依賴抓下來的資料**，跑在手工建構的序列上，所以它釘住的是
 「規則」而不是「這段期間市場剛好怎麼走」。包含門檻邊界（−7.0% 要算、−6.9% 不算）、
@@ -306,6 +320,7 @@ fetch_data.py   抓取 + 快取 + 合併      （單一檔案，可重複執行�
 detect.js       修正波段偵測            （網頁與 Node 共用）
 verify.js       資料與演算法驗證        （node verify.js）
 index.html      儀表板                  （單一檔案，CDN 載入 ECharts）
+bundle.py       打包單一離線 HTML       （python3 bundle.py）
 package.json    僅測試用的 devDependency 與 npm scripts
 tests/
   run.js          測試執行器（含 SKIP 回報）
@@ -313,6 +328,8 @@ tests/
   detect.test.js  演算法單元測試
   fetch_test.py   抓取腳本解析測試（unittest）
   render.test.js  jsdom 端到端渲染測試
+  bundle.test.js  檢查 dist/ 是否落後於來源檔
 data/raw/       原始回應快取
+dist/           打包輸出（不進版控）
 data/taiex-daily.json / .js   合併後輸出
 ```
