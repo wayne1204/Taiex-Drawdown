@@ -295,8 +295,8 @@ module.exports = {
         const candles = (chart.getOption().series[0].data || []).filter(d => Array.isArray(d));
         t.ok("candlestick series carries OHLC array data for > 1300 sessions",
           candles.length > 1300, `${candles.length} candles`);
-        t.eq("all 6 series survive the chart-type toggle",
-          (chart.getOption().series || []).length, 6);
+        t.eq("all 5 series survive the chart-type toggle",
+          (chart.getOption().series || []).length, 5);
         t.ok("no errors after toggling chart type", errors.length === 0,
           errors.slice(0, 3).join(" || "));
 
@@ -365,7 +365,7 @@ module.exports = {
         // data switched but a title still said 外資, the page would be labelling
         // one desk's money with another desk's name.
         {
-          const flowSeries = () => (chart.getOption().series || [])[3];
+          const flowSeries = () => (chart.getOption().series || [])[2];
           const titleAt = i => String(((chart.getOption().title || [])[i] || {}).text || "");
           const pick = v => doc.querySelector(`#seg-desk button[data-v='${v}']`).click();
           const D = window.TAIEX_DATA;
@@ -384,11 +384,11 @@ module.exports = {
             const s = flowSeries();
             t.ok(`${label}: series, both panel titles and the data all switch`,
               s.name === label + "買賣超" &&
-              titleAt(3).startsWith(label) && titleAt(4).startsWith(label) &&
+              titleAt(2).startsWith(label) && titleAt(3).startsWith(label) &&
               s.data[D.length - 1] === lastOf(key),
-              `${s.name} | ${titleAt(3)} | last ${s.data[D.length - 1]} vs ${lastOf(key)}`);
+              `${s.name} | ${titleAt(2)} | last ${s.data[D.length - 1]} vs ${lastOf(key)}`);
 
-            const cum = (chart.getOption().series || [])[4].data;
+            const cum = (chart.getOption().series || [])[3].data;
             const want = +D.reduce((a, r) => a + (r[key] || 0), 0).toFixed(2);
             t.ok(`${label}: cumulative line re-sums that desk`,
               Math.abs(cum[cum.length - 1] - want) < 0.02,
@@ -435,54 +435,16 @@ module.exports = {
             ctx.querySelector(".ctx-sub").textContent.trim().slice(-24));
         }
 
-        // ── Drawdown curve agrees with the table ────────────────────────────
-        // The curve exists to show the same number the table reports, as a
-        // continuous series. If its trough inside an episode's window differed
-        // from that episode's 跌幅, the page would be stating two versions of
-        // one fact and the reader could not tell which to believe.
-        {
-          const uw = (chart.getOption().series || [])[1].data;
-          t.eq("drawdown panel is a line over the full series", uw.length,
-            window.TAIEX_DATA.length);
-          t.ok("drawdown is never positive — it is distance below the prior peak",
-            uw.every(v => v === "-" || v <= 0),
-            `max ${Math.max(...uw.filter(v => v !== "-"))}`);
-
-          const troughs = tol => window.TaiexDetect
-            .detectEpisodes(window.TAIEX_DATA, 0.07, "close", { tol })
-            .map(e => ({
-              want: e.drawdownPct,
-              got: Math.min(...uw.slice(e.peakIdx, e.troughIdx + 1).filter(v => v !== "-"))
-            }));
-
-          // Under 嚴格 the episode peak IS the running maximum, so the two
-          // readings of one number must be identical.
-          const strict = troughs(0);
-          const off = strict.filter(w => Math.abs(w.want - w.got) > 0.01);
-          t.ok("strict mode: each episode's trough equals its 跌幅 in the table",
-            off.length === 0,
-            off.length ? off.map(w => `${w.want.toFixed(2)} vs ${w.got.toFixed(2)}`).join(", ")
-                       : `${strict.length} episodes agree to 0.01pp`);
-
-          // With a tolerance the table measures from a lower high that counted as
-          // a recovery, so the curve — which never ratchets its peak down — may
-          // read deeper. It must never read shallower.
-          t.ok("3% tolerance: the curve is never shallower than the table",
-            troughs(0.03).every(w => w.got <= w.want + 0.01),
-            troughs(0.03).filter(w => w.got < w.want - 0.01)
-              .map(w => `${w.got.toFixed(2)} vs ${w.want.toFixed(2)}`).join(", ") || "all equal");
-        }
-
         // ── Cumulative foreign net rebases to the visible window ─────────
         // Anchored to 2021-01, the line inside a zoomed episode would just be a
         // slice of a five-year running total: the level would be dominated by
         // history and the episode's own shape squeezed flat. It must restart at
         // zero on the left edge of whatever window is in view.
         {
-          // Panel 4 is the cumulative-flow plot (0 index, 1 drawdown, 2 turnover,
-          // 3 daily flow, 4 cumulative, 5 margin).
-          const cumData  = () => (chart.getOption().series || [])[4].data;
-          const cumTitle = () => String(((chart.getOption().title || [])[4] || {}).text || "");
+          // Panel 3 is the cumulative-flow plot (0 index, 1 turnover,
+          // 2 daily flow, 3 cumulative, 4 margin).
+          const cumData  = () => (chart.getOption().series || [])[3].data;
+          const cumTitle = () => String(((chart.getOption().title || [])[3] || {}).text || "");
           // Earlier assertions leave a row selected; start from a known state.
           const clearSelection = () => {
             const sel = doc.querySelector('#tbody tr[aria-selected="true"]');
@@ -557,7 +519,7 @@ module.exports = {
         const g = optOf().grid;
         t.ok("narrow: y-axis gutter shrinks", g[0].left < wideLeft,
           `${wideLeft}px → ${g[0].left}px`);
-        t.eq("narrow: still six panels", g.length, 6);
+        t.eq("narrow: still five panels", g.length, 5);
         t.ok("narrow: panels remain vertically disjoint",
           g.every((x, i) => i === 0 || x.top >= g[i - 1].top + g[i - 1].height),
           g.map(x => `${x.top}+${x.height}`).join(" "));
@@ -565,8 +527,8 @@ module.exports = {
           parseInt(doc.getElementById("chart").style.height, 10) > 0,
           doc.getElementById("chart").style.height);
         t.ok("narrow: x labels drop the century to fit",
-          optOf().xAxis[5].axisLabel.formatter("2026-07-29") === "26/07",
-          optOf().xAxis[5].axisLabel.formatter("2026-07-29"));
+          optOf().xAxis[4].axisLabel.formatter("2026-07-29") === "26/07",
+          optOf().xAxis[4].axisLabel.formatter("2026-07-29"));
         t.ok("narrow: touch panning is disabled so the page can scroll",
           optOf().dataZoom[0].moveOnMouseMove === false,
           `moveOnMouseMove=${optOf().dataZoom[0].moveOnMouseMove}`);
