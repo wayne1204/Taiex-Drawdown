@@ -81,6 +81,7 @@
   /* .seg's own background matches the panel, so lift it off with the page color */
   .panel-head .seg{background:var(--bg)}
   #chart{width:100%;height:900px}
+  #overlay{width:100%;height:340px}
   .legend{display:flex;flex-wrap:wrap;gap:16px;padding:6px 14px 10px;color:var(--ink-3);font-size:12px}
   .legend span{display:inline-flex;align-items:center;gap:6px}
   .dot{width:9px;height:9px;border-radius:2px;display:inline-block}
@@ -285,6 +286,23 @@
         <thead><tr id="thead" role="row"></tr></thead>
         <tbody id="tbody"></tbody>
       </table>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>波段疊圖</h2>
+        <div class="seg" id="seg-ov" role="group" aria-label="疊圖對齊方式">
+          <button data-v="peak" aria-pressed="true">對齊高點</button>
+          <button data-v="trough">對齊谷底</button>
+        </div>
+      </div>
+      <div id="overlay"></div>
+      <div class="legend">
+        <span><i class="dot" style="background:var(--ink-4)"></i>已收復波段</span>
+        <span><i class="dot" style="background:var(--c-cum)"></i>進行中</span>
+        <span><i class="dot" style="background:var(--c-turnover)"></i>表格選取中</span>
+        <span class="ctx-sub">游標移到線上可看是哪一波</span>
+      </div>
     </div>
 
     <div class="panel">
@@ -723,6 +741,101 @@
       : COLORS.index;
   }
 
+  // ── Episode overlay ───────────────────────────────────────
+  // Every episode rebased to 100 at its own peak (or trough), x = trading days
+  // from that anchor. This is the only view that answers "is this one tracking
+  // 2022 or 2024?" — the main chart can only show one window at a time.
+  //
+  // Colour encodes CLASS, not identity: one muted ink for every recovered
+  // episode, one accent for the open one, one for whatever the table has
+  // selected. Twelve categorical hues would be unreadable and unvalidatable;
+  // identity comes from the hover tooltip instead.
+  const overlay = echarts.init(document.getElementById('overlay'), null, {renderer:'canvas'});
+  let ovAlign = 'peak';
+
+  function ovPath(e){
+    // Peak-aligned runs peak -> recovery (or the end of the data). Trough-aligned
+    // starts 30 sessions before the low so the approach into it is visible.
+    const from = ovAlign === 'peak' ? e.peakIdx : Math.max(0, e.troughIdx - 30);
+    const to   = e.recoverIdx === null ? N - 1 : e.recoverIdx;
+    const anchor = ovAlign === 'peak' ? e.peakIdx : e.troughIdx;
+    const base = rows[anchor].close;
+    if(base === null || base === undefined) return [];
+    const out = [];
+    for(let i = from; i <= to; i++){
+      const c = rows[i].close;
+      if(c === null || c === undefined) continue;
+      out.push([i - anchor, +(c / base * 100).toFixed(2)]);
+    }
+    return out;
+  }
+
+  function renderOverlay(){
+    const narrow = isNarrow();
+    const cur = episodes.find(e => e.status === 'ongoing');
+    const series = episodes.map((e,i) => {
+      const on   = i === selected;
+      const live = e === cur;
+      // Draw order: context first, the two highlighted classes on top.
+      const z = on ? 3 : live ? 2 : 1;
+      const color = on ? COLORS.turnover : live ? COLORS.cum : COLORS.ink4;
+      return {
+        name: `#${i+1} ${fd(e.peakDate)}`,
+        type: 'line', data: ovPath(e), showSymbol: false,
+        z, zlevel: 0, silent: false,
+        lineStyle: {width: on || live ? 2 : 1, color, opacity: on || live ? 1 : .5},
+        emphasis: {focus: 'series', lineStyle: {width: 2.5, opacity: 1}},
+        // A drawdown episode is a fall; 跌幅 in the label keeps the reader
+        // anchored to the same number the table reports.
+        tooltip: {}
+      };
+    });
+    overlay.setOption({
+      backgroundColor: 'transparent', animation: false,
+      textStyle: {fontFamily: 'Inter, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif'},
+      grid: {left: narrow ? 44 : 62, right: narrow ? 12 : 26, top: 16, bottom: 34},
+      xAxis: {
+        type: 'value', name: ovAlign === 'peak' ? '距高點交易日' : '距谷底交易日',
+        nameLocation: 'middle', nameGap: 20,
+        nameTextStyle: {color: COLORS.ink3, fontSize: narrow ? 10 : 11},
+        axisLine: {lineStyle: {color: COLORS.line}}, axisTick: {show: false},
+        splitLine: {show: false},
+        axisLabel: {color: COLORS.ink3, fontSize: narrow ? 9 : 11}
+      },
+      yAxis: {
+        type: 'value', scale: true,
+        axisLine: {show: false}, axisTick: {show: false},
+        splitLine: {lineStyle: {color: COLORS.line2}},
+        axisLabel: {color: COLORS.ink3, fontSize: narrow ? 9 : 11}
+      },
+      // Anchor line at 100: above it the episode has recovered its start level.
+      graphic: [],
+      tooltip: {
+        trigger: 'item', confine: true,
+        backgroundColor: alpha(COLORS.surface,.97), borderColor: COLORS.line, borderWidth: 1,
+        textStyle: {color: COLORS.ink, fontSize: narrow ? 11 : 12.5},
+        extraCssText: 'border-radius:8px',
+        formatter: p => {
+          const e = episodes[+p.seriesName.slice(1) - 1];
+          if(!e) return '';
+          return `<div style="font-weight:600;margin-bottom:4px">${p.seriesName}</div>` +
+            `<div style="color:${COLORS.ink3}">${fd(e.peakDate)} → ${fd(e.troughDate)}` +
+            `${e.status === 'ongoing' ? '（進行中）' : ''}</div>` +
+            `<div>第 ${p.data[0]} 個交易日 · 指數為起點的 ${nf(p.data[1],1)}%</div>` +
+            `<div style="color:${COLORS.ink3}">整段跌幅 ${e.drawdownPct.toFixed(2)}%</div>`;
+        }
+      },
+      series: series.concat([{
+        type: 'line', data: [], markLine: {
+          silent: true, symbol: 'none', data: [{yAxis: 100}],
+          lineStyle: {color: COLORS.ink4, width: 1, type: 'dashed'},
+          label: {show: true, formatter: '起點', position: 'insideEndTop',
+                  color: COLORS.ink3, fontSize: 10}
+        }
+      }])
+    }, {notMerge: true});
+  }
+
   // ── KPI cards ─────────────────────────────────────────────
   function renderKpis(){
     const done = episodes.filter(e=>e.status==='recovered');
@@ -915,7 +1028,7 @@
     setCumBase(zoomRange ? zoomRange.s : 0);
     // Order matters: renderChart() rebuilds with notMerge:true and re-applies
     // zoomRange itself. Dispatching a zoom before this call would be discarded.
-    renderChart(); renderTable();
+    renderChart(); renderOverlay(); renderTable();
   }
 
   document.getElementById('tbody').addEventListener('click', ev=>{
@@ -993,6 +1106,7 @@
   // Switching desk changes only what the two flow panels plot — the episodes,
   // the table and the selection are all unaffected, so skip the full recompute.
   segHandler('seg-desk',      v=>{ desk = v; cumView = buildCum(cumBase); }, renderChart);
+  segHandler('seg-ov',        v=>{ ovAlign = v; }, renderOverlay);
   // Switching line/candlestick doesn't change which episodes exist, so only the
   // chart is rebuilt — the table, the selection and the zoom all stay put.
   segHandler('seg-chart',     v=>{ chartType = v; }, renderChart);
@@ -1068,7 +1182,7 @@
     selected = -1;
     zoomRange = null;
     setCumBase(0);
-    renderKpis(); renderContext(); renderChart(); renderTable();
+    renderKpis(); renderContext(); renderChart(); renderOverlay(); renderTable();
   }
 
   const cov = META.coverage || {};
@@ -1081,7 +1195,7 @@
 
   // Re-measure once after first paint: the table can introduce a scrollbar, and
   // a late webfont can shift metrics, both of which change the container width.
-  requestAnimationFrame(()=>chart.resize());
+  requestAnimationFrame(()=>{ chart.resize(); overlay.resize(); });
 
   // Crossing the mobile breakpoint changes grid geometry, axis fonts and label
   // formats, so it needs a full re-render — a bare resize() would keep the old
@@ -1091,8 +1205,8 @@
     clearTimeout(rzTimer);
     rzTimer = setTimeout(()=>{
       const now = isNarrow();
-      if(now !== wasNarrow){ wasNarrow = now; renderChart(); }
-      else chart.resize();
+      if(now !== wasNarrow){ wasNarrow = now; renderChart(); renderOverlay(); }
+      else { chart.resize(); overlay.resize(); }
     }, 150);
   });
 })();

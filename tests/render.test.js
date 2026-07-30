@@ -62,8 +62,9 @@ function buildHtml() {
       }
       return true;
     };
+    var SIZES = { chart: {w:1400, h:900}, overlay: {w:1400, h:340} };
     var sizeOf = function(el){
-      return (el.id === 'chart' && visible(el)) ? {w:1400, h:900} : {w:0, h:0};
+      return (SIZES[el.id] && visible(el)) ? SIZES[el.id] : {w:0, h:0};
     };
     Object.defineProperty(HTMLElement.prototype, 'clientWidth',
       { get: function(){ return sizeOf(this).w; } });
@@ -311,6 +312,53 @@ module.exports = {
           Math.abs(spanOf(zoomedCandle) - spanOf(zoomedLine)) < 2,
           `candle span ${spanOf(zoomedCandle).toFixed(0)} → line span ${spanOf(zoomedLine).toFixed(0)}`);
         t.eq("chart-type toggle flips back to line", typeOfMain(), "line");
+
+        // ── Episode overlay ─────────────────────────────────────────────────
+        // Colour here encodes class (recovered / open / selected), never the
+        // episode's identity. If it ever grew one hue per episode the chart
+        // would be both unreadable and outside the validated palette.
+        {
+          const ov = window.echarts.getInstanceByDom(doc.getElementById("overlay"));
+          t.ok("overlay chart is initialised", !!ov, ov ? "ok" : "missing");
+
+          const paths = () => (ov.getOption().series || []).filter(s => s.data && s.data.length);
+          const eps = window.TaiexDetect.detectEpisodes(
+            window.TAIEX_DATA, 0.07, "close", { tol: 0.03 });
+          t.eq("one path per episode", paths().length, eps.length);
+
+          const classes = new Set(paths().map(s => s.lineStyle.color));
+          t.ok("colour encodes class, not identity (<= 3 hues for any episode count)",
+            classes.size <= 3, `${classes.size} hues for ${eps.length} episodes`);
+
+          t.ok("peak-aligned paths all start at (0, 100)",
+            paths().every(s => s.data[0][0] === 0 && s.data[0][1] === 100),
+            paths().map(s => `${s.data[0][0]}/${s.data[0][1]}`).slice(0, 3).join(" "));
+
+          // The dip of each rebased path must equal the 跌幅 the table prints.
+          const off = paths().map((s, i) => ({
+            want: 100 + eps[i].drawdownPct,
+            got: Math.min(...s.data.map(d => d[1]))
+          })).filter(w => Math.abs(w.want - w.got) > 0.05);
+          t.ok("each path's low equals its episode's 跌幅 rebased to 100",
+            off.length === 0,
+            off.map(w => `${w.got.toFixed(2)} vs ${w.want.toFixed(2)}`).join(", ") || "all agree");
+
+          // Selecting a row must promote exactly one path to the selected class.
+          rowAt(2).click();
+          const sel = paths().filter(s => s.lineStyle.width >= 2 && s.lineStyle.opacity === 1);
+          t.ok("selecting a row highlights its path", sel.length >= 1,
+            `${sel.length} highlighted`);
+          rowAt(2).click();
+
+          doc.querySelector("#seg-ov button[data-v='trough']").click();
+          t.ok("trough alignment shows the approach into the low",
+            paths().every(s => s.data[0][0] <= 0) &&
+            paths().some(s => s.data[0][0] < 0),
+            paths().map(s => s.data[0][0]).slice(0, 4).join(", "));
+          t.ok("x-axis label follows the alignment",
+            /谷底/.test(ov.getOption().xAxis[0].name), ov.getOption().xAxis[0].name);
+          doc.querySelector("#seg-ov button[data-v='peak']").click();
+        }
 
         // ── 法人 selector ───────────────────────────────────────────────────
         // The two flow panels are the only thing that changes. If the series
