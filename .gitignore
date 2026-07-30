@@ -1,0 +1,22 @@
+# Raw TWSE response cache — ~2,800 small files, fully reproducible by re-running
+# fetch_data.py. Delete it and the next run refetches (slowly); keep it and
+# re-runs finish in seconds.
+data/raw/
+
+# Build artifacts of the fetcher
+fetch.log
+__pycache__/
+*.pyc
+
+# Test-only dev dependencies (jsdom + echarts, for tests/render.test.js).
+# The dashboard itself needs none of this.
+node_modules/
+package-lock.json
+
+# Generated single-file build (rebuild with `python3 bundle.py`)
+dist/
+vendor/
+
+# Editor/local
+*.swp
+.claude/settings.local.json

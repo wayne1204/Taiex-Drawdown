@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>台股大盤修正波段分析 · TAIEX Drawdown Atlas</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<style>
+  :root{
+    /* Layout */
+    --bg:#12120f; --surface:#1a1a19; --surface-2:#232320; --line:#33332e;
+    --ink:#f0efec; --ink-2:#c3c2b7; --ink-3:#8a897e;
+
+    /* Chart colors — validated against this dark surface with the dataviz
+       validator: lightness band / chroma floor / CVD separation /
+       normal-vision floor / contrast all PASS. */
+    --c-index:#c3c2b7;      /* Index line: neutral ink, so the red correction mask reads on top */
+    --c-turnover:#3987e5;   /* Turnover value */
+    --c-cum:#c98500;        /* Cumulative foreign net */
+    --c-margin:#9085e9;     /* Margin balance */
+
+    /* Taiwan market convention: RED = up, GREEN = down (inverse of US markets).
+       This red/green pair has low deutan separation, but buy/sell is also
+       encoded by position above/below the zero line — color is redundant here,
+       never the sole carrier of meaning. */
+    --c-up:#e66767; --c-down:#1baf7a;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:"Inter","Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+    font-size:14px; line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .num{font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1}
+  .wrap{max-width:1500px;margin:0 auto;padding:20px 22px 60px}
+
+  /* ── Header ─────────────────────────────── */
+  header{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;justify-content:space-between;
+    padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:20px}
+  h1{font-size:20px;font-weight:600;margin:0;letter-spacing:-.01em}
+  .sub{color:var(--ink-3);font-size:12.5px;margin-top:4px}
+  .controls{display:flex;flex-wrap:wrap;gap:18px;align-items:center}
+  .ctrl-label{color:var(--ink-3);font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+    display:block;margin-bottom:5px}
+  .seg{display:inline-flex;background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:2px}
+  .seg button{
+    appearance:none;border:0;background:transparent;color:var(--ink-2);
+    padding:5px 11px;font-size:13px;border-radius:5px;cursor:pointer;
+    font-variant-numeric:tabular-nums;font-family:inherit;transition:background .12s,color .12s}
+  .seg button:hover{color:var(--ink)}
+  .seg button[aria-pressed="true"]{background:var(--surface-2);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
+  .btn{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
+    padding:7px 13px;border-radius:7px;font-size:13px;cursor:pointer;font-family:inherit}
+  .btn:hover{color:var(--ink);border-color:#4a4a44}
+
+  /* ── KPI cards ──────────────────────────── */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:12px;margin-bottom:20px}
+  .kpi{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:13px 15px}
+  .kpi .k{color:var(--ink-3);font-size:11.5px;letter-spacing:.02em}
+  .kpi .v{font-size:25px;font-weight:600;margin-top:5px;letter-spacing:-.02em}
+  .kpi .n{color:var(--ink-3);font-size:11.5px;margin-top:2px}
+
+  /* ── Charts ─────────────────────────────── */
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:8px 6px 4px;margin-bottom:20px}
+  /* Panel title bar: the chart-style toggle lives with the chart it controls */
+  .panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;
+    flex-wrap:wrap;padding:6px 10px 10px}
+  /* .seg's own background matches the panel, so lift it off with the page color */
+  .panel-head .seg{background:var(--bg)}
+  #chart{width:100%;height:900px}
+  .legend{display:flex;flex-wrap:wrap;gap:16px;padding:6px 14px 10px;color:var(--ink-3);font-size:12px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:9px;height:9px;border-radius:2px;display:inline-block}
+
+  /* ── Table ──────────────────────────────── */
+  .table-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;gap:12px;flex-wrap:wrap}
+  h2{font-size:15px;font-weight:600;margin:0}
+  .hint{color:var(--ink-3);font-size:12px}
+  .tbl-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface);
+    margin-bottom:22px}
+  table{border-collapse:collapse;width:100%;min-width:1460px;font-size:13px}
+  th,td{padding:9px 11px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
+  th{
+    color:var(--ink-3);font-weight:500;font-size:11.5px;text-align:right;
+    cursor:pointer;user-select:none;position:sticky;top:0;background:var(--surface-2);
+    letter-spacing:.02em}
+  th:hover{color:var(--ink)}
+  th.sorted::after{content:" ▾";opacity:.85}
+  th.sorted.asc::after{content:" ▴"}
+  th:first-child,td:first-child{text-align:center}
+  th.txt,td.txt{text-align:left}
+  tbody tr{cursor:pointer}
+  tbody tr:hover{background:#20201d}
+  tbody tr[aria-selected="true"]{background:#2b2320;box-shadow:inset 3px 0 0 var(--c-up)}
+  tbody tr:last-child td{border-bottom:0}
+  .neg{color:var(--c-down)}   /* Taiwan convention: green = down / net sell / decrease */
+  .pos{color:var(--c-up)}     /* Taiwan convention: red = up / net buy / increase */
+  .tag{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;
+    background:#3a2a1a;color:#eda100;border:1px solid #5a4020}
+  .tag.alt{background:#1e2a33;color:#6da7ec;border-color:#26435e}
+  .ratio{border-radius:5px;padding:2px 8px;display:inline-block;min-width:52px}
+  .pending{color:var(--ink-3);font-size:11.5px}
+  footer{color:var(--ink-3);font-size:12px;margin-top:26px;line-height:1.7}
+  code{background:var(--surface-2);padding:1.5px 5px;border-radius:4px;font-size:12px}
+  .err{background:#2b1a1a;border:1px solid #5a2a2a;color:#f0c0c0;padding:18px 20px;
+    border-radius:10px;line-height:1.7}
+
+  /* Sort control — only needed where the sticky headers are hidden */
+  .sortbar{display:none;gap:8px;align-items:center;margin:2px 0 12px}
+  .sortbar select,.sortbar button{
+    background:var(--surface-2);color:var(--ink);border:1px solid var(--line);
+    border-radius:7px;padding:7px 10px;font-size:13px;font-family:inherit}
+  .sortbar select{flex:1;min-width:0}
+  .desktop-only{display:inline}
+
+  /* ── Phones / narrow windows ─────────────────────────────────────────────
+     The table becomes a card list. Fifteen columns of financial data cannot be
+     read by scrolling sideways on a 390px screen; each episode gets its own
+     block with the column name beside every value (via td[data-label]). */
+  @media (max-width: 720px){
+    .wrap{padding:14px 12px 40px}
+    h1{font-size:17px}
+    .sub{font-size:11.5px}
+    header{gap:12px;padding-bottom:12px;margin-bottom:14px}
+    .controls{gap:10px 14px;width:100%}
+    .seg button{padding:6px 9px;font-size:12.5px}
+    .btn{padding:6px 11px;font-size:12.5px}
+
+    .kpis{grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px}
+    .kpi{padding:10px 11px}
+    .kpi .v{font-size:20px}
+    .kpi .k,.kpi .n{font-size:10.5px}
+
+    .panel{padding:4px 2px 2px}
+    .panel-head{padding:6px 8px 8px}
+    .legend{gap:10px;font-size:11px;padding:6px 8px 8px}
+
+    .desktop-only{display:none}
+    .sortbar{display:flex}
+    .tbl-scroll{overflow-x:visible;border:0;background:transparent;border-radius:0}
+    table{min-width:0;display:block}
+    thead{display:none}
+    tbody,tr,td{display:block}
+    tr{
+      background:var(--surface);border:1px solid var(--line);border-radius:10px;
+      padding:6px 12px;margin-bottom:10px}
+    tr[aria-selected="true"]{box-shadow:inset 3px 0 0 var(--c-up);background:#2b2320}
+    td{
+      display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+      text-align:right;padding:5px 0;border-bottom:1px solid #26261f;white-space:normal}
+    td:last-child{border-bottom:0}
+    td::before{
+      content:attr(data-label);color:var(--ink-3);font-size:11.5px;
+      text-align:left;flex:0 0 auto}
+    /* The index column is the card's heading, not a row */
+    td:first-child{
+      text-align:left;font-weight:600;font-size:14px;color:var(--ink);
+      border-bottom:1px solid var(--line);padding-bottom:7px;margin-bottom:2px}
+    td:first-child::before{content:'修正 #';color:var(--ink-3);font-weight:400}
+    td.txt{text-align:right}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1>台股大盤修正波段分析</h1>
+      <div class="sub" id="meta">載入中…</div>
+    </div>
+    <div class="controls">
+      <div>
+        <span class="ctrl-label">修正門檻</span>
+        <div class="seg" id="seg-threshold" role="group" aria-label="修正門檻">
+          <button data-v="0.05">5%</button>
+          <button data-v="0.07" aria-pressed="true">7%</button>
+          <button data-v="0.10">10%</button>
+          <button data-v="0.15">15%</button>
+        </div>
+      </div>
+      <div>
+        <span class="ctrl-label">價格基準</span>
+        <div class="seg" id="seg-mode" role="group" aria-label="價格基準">
+          <button data-v="intraday">盤中高低</button>
+          <button data-v="close" aria-pressed="true">收盤價</button>
+        </div>
+      </div>
+      <div>
+        <span class="ctrl-label">收復認定</span>
+        <div class="seg" id="seg-tol" role="group" aria-label="收復認定容差">
+          <button data-v="0">嚴格</button>
+          <button data-v="0.01">1%</button>
+          <button data-v="0.02">2%</button>
+          <button data-v="0.03" aria-pressed="true">3%</button>
+        </div>
+      </div>
+      <div>
+        <span class="ctrl-label">波段切分</span>
+        <div class="seg" id="seg-split" role="group" aria-label="波段切分方式">
+          <button data-v="newhigh" aria-pressed="true">創新高</button>
+          <button data-v="0.25">反彈25%</button>
+          <button data-v="0.20">反彈20%</button>
+          <button data-v="0.15">反彈15%</button>
+        </div>
+      </div>
+      <div>
+        <span class="ctrl-label">&nbsp;</span>
+        <button class="btn" id="btn-csv">匯出 CSV</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="app" hidden>
+    <div class="kpis" id="kpis"></div>
+
+    <div class="table-head">
+      <h2>修正波段明細</h2>
+      <span class="hint"><span class="desktop-only">點欄位標題排序 · </span>點任一列將下方圖表縮放至該區間前後 40 個交易日 · 再點一次取消</span>
+    </div>
+    <div class="sortbar">
+      <select id="sort-field" aria-label="排序欄位"></select>
+      <button id="sort-dir" aria-label="排序方向">▼ 由大到小</button>
+    </div>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr id="thead"></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>加權指數</h2>
+        <div class="seg" id="seg-chart" role="group" aria-label="主圖樣式">
+          <button data-v="line" aria-pressed="true">線圖</button>
+          <button data-v="candle">K 線</button>
+        </div>
+      </div>
+      <div id="chart"></div>
+      <div class="legend">
+        <span><i class="dot" id="lg-index" style="background:var(--c-index)"></i>加權指數</span>
+        <span><i class="dot" style="background:var(--c-turnover)"></i>成交金額</span>
+        <span><i class="dot" style="background:var(--c-up)"></i>外資買超</span>
+        <span><i class="dot" style="background:var(--c-down)"></i>外資賣超</span>
+        <span><i class="dot" style="background:var(--c-cum)"></i>外資累計買賣超</span>
+        <span><i class="dot" style="background:var(--c-margin)"></i>融資餘額</span>
+        <span><i class="dot" style="background:rgba(230,103,103,.30)"></i>修正區間</span>
+      </div>
+    </div>
+
+
+    <footer>
+      <p><strong>融資殺盤幅度</strong> = 區間融資餘額減幅(%) ÷ 指數跌幅(%)。比值愈高代表散戶去槓桿愈徹底，
+      一般認為 <strong>&gt; 1.5</strong> 時融資籌碼已清洗得較乾淨；色階愈深代表比值愈高，數值本身一律顯示，
+      不以顏色單獨傳達資訊。</p>
+      <p>本欄僅描述已發生的籌碼變化，不構成任何投資建議，本專案亦不產生買賣訊號或目標價。</p>
+      <p>資料來源：臺灣證券交易所（加權指數日 K、市場成交資訊、三大法人買賣金額、信用交易統計）。
+      金額單位皆為新台幣億元。缺漏交易日在圖上以斷點呈現，不以 0 補值。</p>
+    </footer>
+  </div>
+
+  <div id="error" class="err" hidden></div>
+</div>
+
+<script src="data/taiex-daily.js"></script>
+<script src="detect.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  const CSS = getComputedStyle(document.documentElement);
+  const C = k => CSS.getPropertyValue(k).trim();
+  const COLORS = {
+    index:C('--c-index'), turnover:C('--c-turnover'), cum:C('--c-cum'),
+    margin:C('--c-margin'), up:C('--c-up'), down:C('--c-down'),
+    ink:C('--ink'), ink2:C('--ink-2'), ink3:C('--ink-3'),
+    line:C('--line'), surface:C('--surface')
+  };
+
+  // ── Data loading ──────────────────────────────────────────
+  const rows = window.TAIEX_DATA;
+  const META = window.TAIEX_META || {};
+  if(!Array.isArray(rows) || !rows.length){
+    const e = document.getElementById('error');
+    e.hidden = false;
+    e.innerHTML = '<strong>找不到資料。</strong><br>' +
+      '請先執行 <code>python3 fetch_data.py</code> 產生 <code>data/taiex-daily.js</code>，' +
+      '再重新整理本頁。<br>本頁不使用任何模擬資料。';
+    return;
+  }
+
+  const dates  = rows.map(r=>r.date);
+  const N      = rows.length;
+  const gap    = v => (v===null||v===undefined) ? '-' : v;   // '-' renders as a gap in ECharts
+  const closes = rows.map(r=>gap(r.close));
+  const turn   = rows.map(r=>gap(r.turnoverYi));
+  const fgn    = rows.map(r=>gap(r.foreignNetYi));
+  const mgn    = rows.map(r=>gap(r.marginBalanceYi));
+
+  // Cumulative foreign net, rebased to the start of whatever window is in view.
+  // Anchoring it to 2021-01 would make the line inside a zoomed episode read as a
+  // slice of a five-year total — the level would be dominated by history and the
+  // shape of the episode itself would be squeezed flat. Restarting at zero on the
+  // left edge answers the question actually being asked: how much did foreigners
+  // buy or sell *during this stretch*.
+  // A missing day counts as no change, so the line stays continuous.
+  let cumBase = 0;
+  function buildCum(from){
+    let s = 0;
+    return rows.map((r, i) => {
+      if(i < from) return '-';                 // outside the window: draw nothing
+      s += (r.foreignNetYi || 0);
+      return +s.toFixed(2);
+    });
+  }
+  let cumView = buildCum(0);
+  const cumTitle = () => cumBase > 0
+    ? `外資累計買賣超（億元，自 ${fd(dates[cumBase])} 起算）`
+    : '外資累計買賣超（億元，自期初起算）';
+
+  // ── Formatting ────────────────────────────────────────────
+  const nf = (v,d=0)=> (v===null||v===undefined||Number.isNaN(v)) ? '—'
+        : v.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+  const sgn = (v,d=0)=> (v===null||v===undefined) ? '—' : (v>0?'+':'') + nf(v,d);
+  const fd  = d => d ? d.slice(0,4)+'/'+d.slice(5,7)+'/'+d.slice(8,10) : '—';
+  // Correction detection lives in detect.js so the browser and verify.js run
+  // the exact same code path.
+  const detect = (threshold, mode) =>
+    window.TaiexDetect.detectEpisodes(rows, threshold, mode,
+      {rebound: splitRebound, tol: recoverTol});
+
+  // ── State ─────────────────────────────────────────────────
+  let threshold = 0.07, mode = 'close', chartType = 'line';
+  // null = strict "only a new high ends an episode"; a number adds the rebound exit
+  let splitRebound = null;
+  // Recovery tolerance: coming within this much of the prior peak counts as
+  // reclaiming it. Lets two crashes that share a peak separate.
+  let recoverTol = 0.03;
+  let episodes = [], selected = -1;
+  let sortKey = null, sortAsc = false;
+
+  // Current x-range, as data indices. renderChart() re-applies this on every
+  // setOption — without it, notMerge:true would silently reset the view to the
+  // full range every time the chart is rebuilt.
+  let zoomRange = null;   // null = show everything
+
+  // ECharts candlestick wants [open, close, low, high] — note that order.
+  const ohlc = rows.map(r =>
+    (r.open===null||r.close===null||r.low===null||r.high===null)
+      ? '-' : [r.open, r.close, r.low, r.high]);
+
+  // ── Charts ────────────────────────────────────────────────
+  // Reveal the app BEFORE init. ECharts measures its container once, at init,
+  // and a hidden element measures 0x0 — it would silently fall back to a 100px
+  // default and cram all 1,349 sessions into the left edge. setOption never
+  // re-measures; only resize() does.
+  document.getElementById('app').hidden = false;
+
+  const chart = echarts.init(document.getElementById('chart'), null, {renderer:'canvas'});
+
+  // Five stacked panels on one shared x-axis. Daily foreign net and cumulative
+  // foreign net live in separate panels rather than sharing one plot with two
+  // y-scales — a dual-axis chart makes the crossings look meaningful when they
+  // are an artifact of the scaling.
+  // Phones get the same five panels, just tighter: a 70px y-axis gutter eats a
+  // fifth of a 390px screen, and 900px of chart needs the page to scroll rather
+  // than each panel being squashed.
+  const NAMES = ['加權指數','成交金額（億元）','外資買賣超（億元）',
+                 '外資累計買賣超（億元）','融資餘額（億元）'];   // [3] overridden by cumTitle()
+  const isNarrow = () => window.innerWidth <= 720;
+
+  function layout(){
+    const narrow = isNarrow();
+    const mainH  = narrow ? 190 : 250;
+    const subH   = narrow ? 70  : 88;
+    const gap    = narrow ? 40  : 42;      // room for each panel's title
+    const top0   = narrow ? 28  : 34;
+    const grids = [];
+    let top = top0;
+    for(let i=0;i<5;i++){
+      const h = i===0 ? mainH : subH;
+      grids.push({name:NAMES[i], top, height:h});
+      top += h + gap;
+    }
+    return {
+      grids, narrow,
+      left:  narrow ? 46 : 70,
+      right: narrow ? 12 : 26,
+      totalH: top + (narrow ? 34 : 44)     // leave room for the zoom slider
+    };
+  }
+  let L = layout();
+  const GRIDS = L.grids;                   // kept for the partial-merge title patch
+  const LAST = 4;
+
+  const axisCommon = i => ({
+    type:'category', data:dates, gridIndex:i, boundaryGap:false,
+    axisLine:{lineStyle:{color:COLORS.line}},
+    axisTick:{show:false},
+    splitLine:{show:false},
+    axisPointer:{show:true, label:{show:i===LAST, backgroundColor:'#33332e', color:COLORS.ink}},
+    axisLabel: i===LAST
+      ? {color:COLORS.ink3, fontSize:L.narrow?9:11, hideOverlap:true,
+         // On a phone there is no room for YYYY/MM on every tick
+         formatter:v=> L.narrow ? v.slice(2,4)+'/'+v.slice(5,7)
+                                : v.slice(0,4)+'/'+v.slice(5,7)}
+      : {show:false}
+  });
+  const valCommon = i => ({
+    type:'value', gridIndex:i, scale:i===0,
+    axisLine:{show:false}, axisTick:{show:false},
+    splitLine:{lineStyle:{color:'#26261f'}},
+    axisLabel:{color:COLORS.ink3, fontSize:L.narrow?9:11,
+      // 46px of gutter cannot hold "45,000"; abbreviate hard on narrow screens
+      formatter:v=>{
+        const a = Math.abs(v);
+        if(a>=10000) return (v/10000).toFixed(L.narrow?0:1)+'萬';
+        if(L.narrow && a>=1000) return (v/1000).toFixed(0)+'k';
+        return nf(v,0);
+      }}
+  });
+
+  function markAreaFor(eps, main){
+    return {
+      silent:true,
+      itemStyle:{color: main ? 'rgba(230,103,103,0.13)' : 'rgba(230,103,103,0.09)'},
+      emphasis:{disabled:true},
+      data: eps.map((e,i)=>{
+        const on = i===selected;
+        return [
+          {xAxis:e.peakDate,
+           itemStyle:{color: on ? 'rgba(230,103,103,0.30)' : (main?'rgba(230,103,103,0.13)':'rgba(230,103,103,0.09)')},
+           label: main ? {show:true, formatter:'#'+(i+1), position:'insideTop',
+                          color: on?'#ffb4b4':'#8a6a6a', fontSize:10} : {show:false}},
+          {xAxis:e.troughDate}
+        ];
+      })
+    };
+  }
+
+  function tooltipFormatter(params){
+    if(!params || !params.length) return '';
+    const i = params[0].dataIndex, r = rows[i];
+    if(!r) return '';
+    const li = (label,val,color)=>
+      `<div style="display:flex;justify-content:space-between;gap:18px;line-height:1.65">
+         <span style="color:#8a897e">${color?`<i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:6px"></i>`:''}${label}</span>
+         <span style="font-variant-numeric:tabular-nums;color:#f0efec">${val}</span>
+       </div>`;
+    const chg = i>0 && r.close!==null && rows[i-1].close!==null ? r.close-rows[i-1].close : null;
+    const chgPct = (chg!==null && rows[i-1].close) ? chg/rows[i-1].close*100 : null;
+    const chgColor = chg===null ? COLORS.ink2 : (chg>=0?COLORS.up:COLORS.down);
+
+    // Which correction window this day falls in
+    let band='';
+    const k = episodes.findIndex(e=> i>=e.peakIdx && i<=(e.recoverIdx===null? N-1 : e.recoverIdx));
+    if(k>=0){
+      const e=episodes[k];
+      const phase = i<=e.troughIdx ? '下跌中' : '收復中';
+      band = `<div style="margin-top:7px;padding-top:6px;border-top:1px solid #33332e;color:#c98500;font-size:11.5px">
+                修正 #${k+1} · ${phase} · 波段跌幅 ${e.drawdownPct.toFixed(2)}%</div>`;
+    }
+    return `<div style="min-width:230px;font-size:12.5px">
+      <div style="color:#f0efec;font-weight:600;margin-bottom:6px">${fd(r.date)}</div>
+      ${li('收盤', nf(r.close,2), COLORS.index)}
+      ${li('漲跌', chg===null?'—':`<span style="color:${chgColor}">${sgn(chg,2)} (${sgn(chgPct,2)}%)</span>`)}
+      ${li('高 / 低', `${nf(r.high,2)} / ${nf(r.low,2)}`)}
+      ${li('成交金額', nf(r.turnoverYi,0)+' 億', COLORS.turnover)}
+      ${li('外資買賣超', r.foreignNetYi===null?'—':`<span style="color:${r.foreignNetYi>=0?COLORS.up:COLORS.down}">${sgn(r.foreignNetYi,1)} 億</span>`,
+           r.foreignNetYi===null?null:(r.foreignNetYi>=0?COLORS.up:COLORS.down))}
+      ${li('外資累計', cumView[i]==='-' ? '—' : sgn(cumView[i],0)+' 億', COLORS.cum)}
+      ${li('融資餘額', nf(r.marginBalanceYi,0)+' 億', COLORS.margin)}
+      ${band}</div>`;
+  }
+
+  // Both dataZoom components must carry the same range, or the slider and the
+  // inside-zoom disagree after a rebuild.
+  const zoomOpt = () => zoomRange
+    ? {startValue: zoomRange.s, endValue: zoomRange.e}
+    : {start: 0, end: 100};
+
+  function mainSeries(){
+    const common = {
+      name:'加權指數', xAxisIndex:0, yAxisIndex:0,
+      markArea: markAreaFor(episodes, true)
+    };
+    if(chartType === 'candle'){
+      return { ...common, type:'candlestick', data:ohlc,
+        itemStyle:{                       // 台股慣例：紅漲綠跌
+          color:COLORS.up,       borderColor:COLORS.up,      // 收 >= 開
+          color0:COLORS.down,    borderColor0:COLORS.down    // 收 <  開
+        },
+        // At full zoom the candles are sub-pixel; barMaxWidth keeps them from
+        // fusing into a solid block once zoomed in.
+        barMaxWidth:9
+      };
+    }
+    return { ...common, type:'line', data:closes,
+      showSymbol:false, symbol:'circle', symbolSize:8, connectNulls:false,
+      lineStyle:{width:2, color:COLORS.index},
+      areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[
+        {offset:0,color:'rgba(195,194,183,.14)'},{offset:1,color:'rgba(195,194,183,0)'}])} };
+  }
+
+  function renderChart(){
+    // Recompute on every render so a rotation or window resize is picked up.
+    L = layout();
+    const el = document.getElementById('chart');
+    if(parseInt(el.style.height, 10) !== L.totalH){
+      el.style.height = L.totalH + 'px';
+      chart.resize();
+    }
+    const opt = {
+      backgroundColor:'transparent',
+      animation:false,
+      textStyle:{fontFamily:'Inter, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif'},
+      title: L.grids.map((g,i)=>({
+        text: i===3 ? cumTitle() : g.name, left:L.narrow?8:14, top:g.top-19,
+        textStyle:{color:COLORS.ink3, fontSize:L.narrow?10:11.5, fontWeight:500}
+      })),
+      grid: L.grids.map(g=>({left:L.left, right:L.right, top:g.top, height:g.height})),
+      xAxis: GRIDS.map((_,i)=>axisCommon(i)),
+      yAxis: GRIDS.map((_,i)=>valCommon(i)),
+      axisPointer:{
+        link:[{xAxisIndex:'all'}],
+        lineStyle:{color:'#6a6a60', width:1, type:'dashed'},
+        label:{backgroundColor:'#33332e'}
+      },
+      tooltip:{
+        trigger:'axis', axisPointer:{type:'cross'},
+        backgroundColor:'rgba(26,26,25,.97)', borderColor:'#33332e', borderWidth:1,
+        padding:L.narrow?[8,9]:[10,12], confine:true,
+        extraCssText:'backdrop-filter:blur(4px);border-radius:8px;max-width:88vw',
+        textStyle:{color:COLORS.ink, fontSize:L.narrow?11:12.5},
+        formatter: tooltipFormatter
+      },
+      dataZoom:[
+        // On touch, ECharts' inside-zoom captures one-finger drags, which would
+        // hijack vertical page scrolling. Leave pinch-zoom on, panning off, and
+        // let the (enlarged) slider be the deliberate way to move the window.
+        {type:'inside', xAxisIndex:[0,1,2,3,4], ...zoomOpt(), zoomOnMouseWheel:true,
+         moveOnMouseMove: !L.narrow, preventDefaultMouseMove: !L.narrow},
+        {type:'slider', xAxisIndex:[0,1,2,3,4], height:L.narrow?26:20, bottom:10, ...zoomOpt(),
+         backgroundColor:'#1a1a19', borderColor:'#33332e', fillerColor:'rgba(57,135,229,.14)',
+         handleStyle:{color:'#4a4a44'}, moveHandleStyle:{color:'#4a4a44'},
+         dataBackground:{lineStyle:{color:'#3a3a34'}, areaStyle:{color:'#26261f'}},
+         selectedDataBackground:{lineStyle:{color:'#5a5a52'}, areaStyle:{color:'#2e2e28'}},
+         textStyle:{color:COLORS.ink3, fontSize:10},
+         labelFormatter: v => dates[Math.round(v)] ? dates[Math.round(v)].slice(0,7) : ''}
+      ],
+      series:[
+        mainSeries(),
+
+        { name:'成交金額', type:'bar', data:turn, xAxisIndex:1, yAxisIndex:1,
+          itemStyle:{color:COLORS.turnover, borderRadius:[2,2,0,0]}, barMaxWidth:6,
+          markArea: markAreaFor(episodes, false) },
+
+        { name:'外資買賣超', type:'bar', data:fgn, xAxisIndex:2, yAxisIndex:2,
+          itemStyle:{ borderRadius:[2,2,0,0],
+            color:p => (p.value>=0 ? COLORS.up : COLORS.down) }, barMaxWidth:6,
+          markLine:{silent:true, symbol:'none', data:[{yAxis:0}],
+            lineStyle:{color:'#4a4a44', width:1}, label:{show:false}},
+          markArea: markAreaFor(episodes, false) },
+
+        { name:'外資累計買賣超', type:'line', data:cumView, xAxisIndex:3, yAxisIndex:3,
+          showSymbol:false, symbolSize:8, lineStyle:{width:2, color:COLORS.cum},
+          areaStyle:{color:'rgba(201,133,0,.10)'},
+          markLine:{silent:true, symbol:'none', data:[{yAxis:0}],
+            lineStyle:{color:'#4a4a44', width:1}, label:{show:false}},
+          markArea: markAreaFor(episodes, false) },
+
+        { name:'融資餘額', type:'line', data:mgn, xAxisIndex:4, yAxisIndex:4,
+          showSymbol:false, symbolSize:8, connectNulls:false,
+          lineStyle:{width:2, color:COLORS.margin},
+          areaStyle:{color:'rgba(144,133,233,.10)'},
+          markArea: markAreaFor(episodes, false) }
+      ]
+    };
+    chart.setOption(opt, {notMerge:true});
+
+    // Keep the legend swatch honest: in candlestick mode the index is drawn in
+    // the red/green up-down pair, not the neutral line colour.
+    document.getElementById('lg-index').style.background = chartType === 'candle'
+      ? `linear-gradient(135deg, ${COLORS.up} 50%, ${COLORS.down} 50%)`
+      : COLORS.index;
+  }
+
+  // ── KPI cards ─────────────────────────────────────────────
+  function renderKpis(){
+    const done = episodes.filter(e=>e.status==='recovered');
+    const avg = (a,f)=> a.length ? a.reduce((s,x)=>s+f(x),0)/a.length : null;
+
+    // Current drawdown: distance from the all-time peak on the selected price basis
+    const HI = i => mode==='intraday' ? rows[i].high : rows[i].close;
+    let peak=-Infinity, peakAt=null;
+    for(let i=0;i<N;i++){ const h=HI(i); if(h!==null&&h>peak){peak=h;peakAt=dates[i];} }
+    const lastClose = (()=>{ for(let i=N-1;i>=0;i--) if(rows[i].close!==null) return rows[i].close; return null; })();
+    const curDD = (peak>0 && lastClose!==null) ? (lastClose-peak)/peak*100 : null;
+
+    const cards = [
+      ['總修正次數', episodes.length, `門檻 ${(threshold*100).toFixed(0)}% · ${mode==='intraday'?'盤中高低':'收盤價'}`],
+      ['平均跌幅', avg(episodes,e=>e.drawdownPct), '峰 → 谷', '%', 2],
+      ['平均下跌天數', avg(episodes,e=>e.declineDays), '交易日', '', 0],
+      ['平均收復天數', avg(done,e=>e.recoveryDays), done.length?`${done.length} 波已收復`:'尚無已收復波段', '', 0],
+      ['目前回檔幅度', curDD, peakAt?`距 ${fd(peakAt)} 高點`:'', '%', 2]
+    ];
+    document.getElementById('kpis').innerHTML = cards.map(([k,v,n,unit,d])=>{
+      const isPct = unit==='%';
+      const cls = isPct && v!==null ? (v<0?'neg':'pos') : '';
+      const txt = v===null ? '—' : (typeof v==='number' && d!==undefined
+        ? (isPct? sgn(v,d) : nf(v,d)) + (unit||'') : nf(v,0));
+      return `<div class="kpi"><div class="k">${k}</div>
+        <div class="v num ${cls}">${txt}</div><div class="n">${n||''}</div></div>`;
+    }).join('');
+  }
+
+  // ── Table ─────────────────────────────────────────────────
+  const COLS = [
+    {k:'idx',   t:'#',            f:(e,i)=>i+1, txt:false},
+    {k:'peakDate', t:'期間',      f:e=>`${fd(e.peakDate)} – ${fd(e.troughDate)}`, txt:true},
+    {k:'peakVal',  t:'高點',      f:e=>nf(e.peakVal,2)},
+    {k:'troughVal',t:'低點',      f:e=>nf(e.troughVal,2)},
+    {k:'drawdownPct', t:'跌幅', f:e=>`<span class="neg">${e.drawdownPct.toFixed(2)}%</span>`},
+    {k:'declineDays', t:'下跌天數',  f:e=>nf(e.declineDays,0)},
+    {k:'recoveryDays',t:'收復天數', f:e=> e.recoveryDays===null
+        ? '<span class="tag">進行中</span>'
+        // A rebound exit ends the episode while still BELOW the prior peak, so the
+        // count is days-to-rebound, not days-to-recover. Label it rather than let
+        // the two be read as the same thing.
+        : nf(e.recoveryDays,0) + (
+            e.endReason==='rebound'   ? ' <span class="tag alt">反彈</span>' :
+            e.endReason==='tolerance' ? ' <span class="tag alt">容差</span>' : '')},
+    {k:'avgTurnoverYi', t:'區間日均量',  f:e=>nf(e.avgTurnoverYi,0)},
+    {k:'turnoverChgPct',t:'量能變化', f:e=> e.turnoverChgPct===null?'—'
+        : `<span class="${e.turnoverChgPct>=0?'pos':'neg'}">${sgn(e.turnoverChgPct,1)}%</span>`},
+    {k:'foreignSumYi',  t:'外資累計買賣超',   f:e=> e.foreignSumYi===null?'—'
+        : `<span class="${e.foreignSumYi>=0?'pos':'neg'}">${sgn(e.foreignSumYi,0)}</span>`},
+    {k:'marginChgYi',   t:'融資餘額變化', f:e=> e.marginChgYi===null?'—'
+        : `<span class="${e.marginChgYi>=0?'pos':'neg'}">${sgn(e.marginChgYi,0)} (${sgn(e.marginChgPct,1)}%)</span>`},
+    {k:'fwd1mPct', t:'谷底後1個月', f:e=>fwdCell(e.fwd1mPct)},
+    {k:'fwd3mPct', t:'谷底後3個月', f:e=>fwdCell(e.fwd3mPct)},
+    {k:'fwd1yPct', t:'谷底後1年',   f:e=>fwdCell(e.fwd1yPct)},
+    {k:'killRatio',     t:'融資殺盤幅度', f:e=>{
+        if(e.killRatio===null) return '—';
+        // Single-hue sequential scale (not a rainbow); the number itself is always
+        // shown, so color never carries the meaning on its own.
+        const t = Math.max(0, Math.min(1,(e.killRatio-0.4)/1.8));
+        const a = (0.06 + t*0.46).toFixed(2);
+        const strong = e.killRatio>=1.5;
+        return `<span class="ratio num" style="background:rgba(57,135,229,${a});${strong?'box-shadow:inset 0 0 0 1px rgba(57,135,229,.7)':''}">${e.killRatio.toFixed(2)}</span>`;
+      }}
+  ];
+
+  // Forward return from the trough. Null means the series does not reach that far
+  // yet — shown as 未滿 rather than a blank, so "no data yet" is not mistaken for
+  // "no move".
+  const fwdCell = v => v===null || v===undefined
+    ? '<span class="pending">未滿</span>'
+    : `<span class="${v>=0?'pos':'neg'}">${sgn(v,1)}%</span>`;
+
+  function sortedEpisodes(){
+    const list = episodes.map((e,i)=>({e, i}));
+    if(sortKey){
+      list.sort((a,b)=>{
+        let x=a.e[sortKey], y=b.e[sortKey];
+        if(sortKey==='idx'){ x=a.i; y=b.i; }
+        if(x===null||x===undefined) return 1;      // nulls always sort last
+        if(y===null||y===undefined) return -1;
+        if(typeof x==='string') return sortAsc ? x.localeCompare(y) : y.localeCompare(x);
+        return sortAsc ? x-y : y-x;
+      });
+    }
+    return list;
+  }
+
+  function renderTable(){
+    document.getElementById('thead').innerHTML = COLS.map(c=>
+      `<th data-k="${c.k}" class="${c.txt?'txt':''} ${sortKey===c.k?'sorted '+(sortAsc?'asc':''):''}">${c.t}</th>`
+    ).join('');
+
+    document.getElementById('tbody').innerHTML = sortedEpisodes().map(({e,i})=>
+      `<tr data-i="${i}" aria-selected="${i===selected}">` +
+      COLS.map(c=>`<td class="${c.txt?'txt':'num'}" data-label="${c.t}">${c.f(e,i)}</td>`).join('') +
+      `</tr>`
+    ).join('');
+
+    syncSortUI();
+  }
+
+  // ── Interaction ───────────────────────────────────────────
+  // Re-anchor the cumulative foreign-flow line to the left edge of the view.
+  function setCumBase(from){
+    if(from === cumBase) return false;
+    cumBase = from;
+    cumView = buildCum(from);
+    return true;
+  }
+
+  function select(i){
+    selected = (selected===i) ? -1 : i;
+    if(selected>=0){
+      // Zoom to the episode plus 40 trading days either side, so the run-up into
+      // the peak and the shape of the recovery are both visible.
+      const e = episodes[selected], pad = 40;
+      const end = e.recoverIdx===null ? N-1 : e.recoverIdx;
+      zoomRange = {s: Math.max(0, e.peakIdx - pad), e: Math.min(N-1, end + pad)};
+    }else{
+      zoomRange = null;
+    }
+    setCumBase(zoomRange ? zoomRange.s : 0);
+    // Order matters: renderChart() rebuilds with notMerge:true and re-applies
+    // zoomRange itself. Dispatching a zoom before this call would be discarded.
+    renderChart(); renderTable();
+  }
+
+  document.getElementById('tbody').addEventListener('click', ev=>{
+    const tr = ev.target.closest('tr'); if(!tr) return;
+    select(+tr.dataset.i);
+  });
+
+  // Mobile sort control. The sticky headers are hidden in card view, so sorting
+  // needs its own affordance; it shares sortKey/sortAsc with the header clicks
+  // so the two can never disagree.
+  const sortField = document.getElementById('sort-field');
+  const sortDir   = document.getElementById('sort-dir');
+  sortField.innerHTML = '<option value="">預設（時間順序）</option>' +
+    COLS.filter(c=>c.k!=='idx').map(c=>`<option value="${c.k}">${c.t}</option>`).join('');
+  function syncSortUI(){
+    sortField.value = sortKey || '';
+    sortDir.textContent = sortAsc ? '▲ 由小到大' : '▼ 由大到小';
+    sortDir.disabled = !sortKey;
+  }
+  sortField.addEventListener('change', ()=>{
+    sortKey = sortField.value || null;
+    renderTable();
+  });
+  sortDir.addEventListener('click', ()=>{
+    if(!sortKey) return;
+    sortAsc = !sortAsc;
+    renderTable();
+  });
+
+  document.getElementById('thead').addEventListener('click', ev=>{
+    const th = ev.target.closest('th'); if(!th) return;
+    const k = th.dataset.k;
+    if(sortKey===k) sortAsc = !sortAsc; else { sortKey=k; sortAsc=false; }
+    renderTable();
+  });
+
+  function segHandler(id, apply, after){
+    document.getElementById(id).addEventListener('click', ev=>{
+      const b = ev.target.closest('button'); if(!b) return;
+      [...b.parentNode.children].forEach(x=>x.setAttribute('aria-pressed', String(x===b)));
+      apply(b.dataset.v);
+      (after || recompute)();
+    });
+  }
+  segHandler('seg-threshold', v=>{ threshold = parseFloat(v); });
+  segHandler('seg-mode',      v=>{ mode = v; });
+  segHandler('seg-split',     v=>{ splitRebound = v==='newhigh' ? null : parseFloat(v); });
+  segHandler('seg-tol',       v=>{ recoverTol = parseFloat(v); });
+  // Switching line/candlestick doesn't change which episodes exist, so only the
+  // chart is rebuilt — the table, the selection and the zoom all stay put.
+  segHandler('seg-chart',     v=>{ chartType = v; }, renderChart);
+
+  // Keep zoomRange in step with pans and wheel-zooms, so a later rebuild
+  // (e.g. toggling to candlesticks) doesn't throw away where the user is looking.
+  let cumTimer = null;
+  chart.on('dataZoom', ()=>{
+    const dz = (chart.getOption().dataZoom || [])[0];
+    if(!dz) return;
+    let s = dz.startValue, e = dz.endValue;
+    // Wheel-zoom often reports percentages rather than indices; accept either.
+    if(typeof s !== 'number' || typeof e !== 'number'){
+      if(typeof dz.start !== 'number' || typeof dz.end !== 'number') return;
+      s = dz.start / 100 * (N-1);
+      e = dz.end   / 100 * (N-1);
+    }
+    zoomRange = (s <= 0 && e >= N-1) ? null : {s:Math.round(s), e:Math.round(e)};
+
+    clearTimeout(cumTimer);
+    cumTimer = setTimeout(()=>{
+      if(!setCumBase(zoomRange ? zoomRange.s : 0)) return;
+      // Partial merge: only series 3's data and its title change, so there is no
+      // need to rebuild every grid while the user is still dragging.
+      chart.setOption({
+        title: GRIDS.map((g,i)=>({text: i===3 ? cumTitle() : g.name})),
+        series: [{}, {}, {}, {data: cumView}, {}]
+      });
+    }, 120);
+  });
+
+  // ── CSV export ────────────────────────────────────────────
+  document.getElementById('btn-csv').addEventListener('click', ()=>{
+    const head = ['#','起日','訖日','高點','低點','跌幅%','下跌天數','收復天數',
+      '區間日均量(億)','量能變化%','外資累計買賣超(億)','融資起點(億)','融資低點(億)',
+      '融資變化(億)','融資變化%','谷底後1個月%','谷底後3個月%','谷底後1年%',
+      '融資殺盤幅度','狀態'];
+    const esc = v => (v===null||v===undefined) ? '' :
+      (/[",\n]/.test(String(v)) ? '"'+String(v).replace(/"/g,'""')+'"' : String(v));
+    const body = sortedEpisodes().map(({e,i})=>[
+      i+1, e.peakDate, e.troughDate,
+      e.peakVal?.toFixed(2), e.troughVal?.toFixed(2), e.drawdownPct.toFixed(2),
+      e.declineDays, e.recoveryDays===null?'進行中':e.recoveryDays,
+      e.avgTurnoverYi?.toFixed(0), e.turnoverChgPct?.toFixed(1),
+      e.foreignSumYi?.toFixed(0), e.marginStartYi?.toFixed(0), e.marginTroughYi?.toFixed(0),
+      e.marginChgYi?.toFixed(0), e.marginChgPct?.toFixed(1),
+      e.fwd1mPct?.toFixed(1), e.fwd3mPct?.toFixed(1), e.fwd1yPct?.toFixed(1),
+      e.killRatio?.toFixed(2),
+      e.status==='ongoing'?'進行中':'已收復'
+    ].map(esc).join(','));
+
+    const blob = new Blob(['﻿'+[head.join(','),...body].join('\n')],
+      {type:'text/csv;charset=utf-8'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `taiex-corrections-${(threshold*100).toFixed(0)}pct-${mode}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  // ── Recompute ─────────────────────────────────────────────
+  function recompute(){
+    episodes = detect(threshold, mode);
+    selected = -1;
+    renderKpis(); renderChart(); renderTable();
+  }
+
+  const cov = META.coverage || {};
+  document.getElementById('meta').textContent =
+    `${META.start||dates[0]} ~ ${META.end||dates[N-1]} · ${N} 個交易日 · ` +
+    `籌碼覆蓋 成交${cov.turnover??'?'} / 外資${cov.foreign??'?'} / 融資${cov.margin??'?'}` +
+    (META.generatedAt ? ` · 更新於 ${META.generatedAt.replace('T',' ')}` : '');
+
+  recompute();
+
+  // Re-measure once after first paint: the table can introduce a scrollbar, and
+  // a late webfont can shift metrics, both of which change the container width.
+  requestAnimationFrame(()=>chart.resize());
+
+  // Crossing the mobile breakpoint changes grid geometry, axis fonts and label
+  // formats, so it needs a full re-render — a bare resize() would keep the old
+  // desktop margins on a phone. Debounced because rotation fires a burst.
+  let wasNarrow = isNarrow(), rzTimer = null;
+  window.addEventListener('resize', ()=>{
+    clearTimeout(rzTimer);
+    rzTimer = setTimeout(()=>{
+      const now = isNarrow();
+      if(now !== wasNarrow){ wasNarrow = now; renderChart(); }
+      else chart.resize();
+    }, 150);
+  });
+})();
+</script>
+</body>
+</html>
