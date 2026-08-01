@@ -134,8 +134,15 @@ def is_stale(key, payload):
     A cache entry is final only once the period it covers is closed. Two cases
     are not:
 
-      * the current month (key `YYYYMM`) - a monthly response fetched today grows
-        a row after every session, so yesterday's copy is short by a day;
+      * a monthly response (key `YYYYMM`) fetched while that month was still
+        open - it grows a row after every session, so a copy fetched partway
+        through the month is short some days. This is not just "key equals
+        the current month": a run late on the month's last trading day (or
+        one that simply never re-ran before the calendar rolled over) leaves
+        behind a cache stamped with that month's key but fetched before the
+        month actually finished, and it would otherwise be trusted as final
+        forever. `_fetchedOn` (set when the entry is written) pins that down
+        precisely: stale iff it was fetched during the same month it covers;
       * an `_empty` marker on a recent day (key `YYYYMMDD`) - TWSE publishes the
         daily chip data a few hours after the close, so a run that lands before
         publication would otherwise freeze "no data" in place permanently.
@@ -144,7 +151,12 @@ def is_stale(key, payload):
     """
     today = date.today()
     if re.fullmatch(r"\d{6}", key):
-        return key == f"{today.year:04d}{today.month:02d}"
+        fetched_on = payload.get("_fetchedOn")
+        if fetched_on is None:
+            # Pre-existing cache from before _fetchedOn was tracked - fall back
+            # to the old, coarser check rather than assume it needs a refetch.
+            return key == f"{today.year:04d}{today.month:02d}"
+        return fetched_on[:4] + fetched_on[5:7] == key
     if re.fullmatch(r"\d{8}", key) and payload.get("_empty"):
         d = parse_twse_date(key)
         if d is None:
@@ -160,6 +172,7 @@ def fetch(endpoint, path, params, key, rebuild_only=False):
     makes the second run finish in seconds.
     """
     cp = _cache_path(endpoint, key)
+    today = date.today()
     cached = None
     if os.path.exists(cp):
         try:
@@ -201,6 +214,8 @@ def fetch(endpoint, path, params, key, rebuild_only=False):
                 # Non-trading day / no data - normal. Cache an empty marker so we
                 # never ask again.
                 payload = {"stat": stat, "_empty": True}
+            if re.fullmatch(r"\d{6}", key):
+                payload["_fetchedOn"] = today.isoformat()
             with open(cp, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False)
             time.sleep(SLEEP_BASE + random.uniform(0, SLEEP_JITTER))
