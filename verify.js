@@ -32,8 +32,8 @@ const fmt = n => n === null || n === undefined ? "—"
 // ── Data integrity ─────────────────────────────────────────────────────────
 console.log("\nData integrity");
 const cov = k => rows.filter(r => r[k] !== null && r[k] !== undefined).length;
-check("covers 2019-01-01 onward", rows[0].date <= "2019-01-05", rows[0].date);
-check("at least 1,800 trading days", rows.length >= 1800, `${rows.length} days`);
+check("covers 2017-01-01 onward", rows[0].date <= "2017-01-05", rows[0].date);
+check("at least 2,200 trading days", rows.length >= 2200, `${rows.length} days`);
 check("OHLC complete", cov("close") === rows.length, `${cov("close")}/${rows.length}`);
 check("turnover >= 99%", cov("turnoverYi") / rows.length >= 0.99,
       `${cov("turnoverYi")}/${rows.length}`);

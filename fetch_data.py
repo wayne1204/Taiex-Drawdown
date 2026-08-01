@@ -17,7 +17,7 @@ Outputs:
   data/raw/<endpoint>/*.json     raw response cache (re-runs skip these entirely)
 
 Usage:
-  python3 fetch_data.py                    # full run (~110 min first time; almost
+  python3 fetch_data.py                    # full run (~150 min first time; almost
                                            #   all of it is rate-limit sleeping)
   python3 fetch_data.py --start 2024-01    # backfill a narrower window
   python3 fetch_data.py --rebuild          # no requests at all; rebuild outputs
@@ -48,7 +48,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(ROOT, "data")
 RAW_DIR = os.path.join(DATA_DIR, "raw")
 
-DEFAULT_START = "2019-01"
+DEFAULT_START = "2017-01"
 
 # TWSE throttles at roughly 3 requests per 5 seconds. Do not lower these to make
 # the run faster - you will start getting 429s and HTML maintenance pages.
@@ -409,7 +409,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="Fetch TWSE data and build data/taiex-daily.json")
     ap.add_argument("--start", default=DEFAULT_START,
-                    help="start month YYYY-MM (default 2019-01)")
+                    help="start month YYYY-MM (default 2017-01)")
     ap.add_argument("--end", default=None, help="end month YYYY-MM (default: today)")
     ap.add_argument("--rebuild", action="store_true",
                     help="issue no requests; rebuild outputs from the cache only")
