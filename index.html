@@ -796,7 +796,11 @@
 
   // ── KPI cards ─────────────────────────────────────────────
   function renderKpis(){
-    const done = episodes.filter(e=>e.status==='recovered');
+    // A tolerance or rebound close ends an episode (so the next decline is
+    // tracked separately) without the price actually reclaiming the old high -
+    // status alone can't tell them apart from a genuine recovery. "Recovered"
+    // for stats purposes means endReason 'newhigh': price >= the prior peak.
+    const done = episodes.filter(e=>e.endReason==='newhigh');
     const avg = (a,f)=> a.length ? a.reduce((s,x)=>s+f(x),0)/a.length : null;
 
     // Current drawdown: distance from the all-time peak on the selected price basis
@@ -1114,7 +1118,10 @@
       e.marginChgYi?.toFixed(0), e.marginChgPct?.toFixed(1),
       e.fwd1mPct?.toFixed(1), e.fwd3mPct?.toFixed(1), e.fwd1yPct?.toFixed(1),
       e.killRatio?.toFixed(2),
-      e.status==='ongoing'?'進行中':'已收復'
+      e.status==='ongoing' ? '進行中'
+        : e.endReason==='rebound' ? '反彈收盤'
+        : e.endReason==='tolerance' ? '容差收盤'
+        : '創新高'
     ].map(esc).join(','));
 
     const blob = new Blob(['﻿'+[head.join(','),...body].join('\n')],
