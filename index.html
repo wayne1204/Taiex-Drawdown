@@ -84,6 +84,13 @@
   /* .seg's own background matches the panel, so lift it off with the page color */
   .panel-head .seg{background:var(--bg)}
   #chart{width:100%;height:900px}
+  .panel-tools{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  .date-pick{display:inline-flex;align-items:center;gap:7px;color:var(--ink-3);font-size:12px}
+  .date-pick input{background:var(--bg);color:var(--ink);border:1px solid var(--line);
+    border-radius:7px;padding:4px 8px;font:inherit;font-size:13px;color-scheme:dark}
+  .chart-wrap{position:relative}
+  .chart-float{position:absolute;z-index:2;background:var(--bg)}
+  .seg-sm button{padding:2px 9px;font-size:12px}
   #overlay{width:100%;height:340px}
   .legend{display:flex;flex-wrap:wrap;gap:16px;padding:6px 14px 10px;color:var(--ink-3);font-size:12px}
   .legend span{display:inline-flex;align-items:center;gap:6px}
@@ -245,14 +252,6 @@
         </div>
       </div>
       <div>
-        <span class="ctrl-label">法人</span>
-        <div class="seg" id="seg-desk" role="group" aria-label="法人買賣超對象">
-          <button data-v="foreign" aria-pressed="true">外資</button>
-          <button data-v="trust">投信</button>
-          <button data-v="dealer">自營商</button>
-        </div>
-      </div>
-      <div>
         <span class="ctrl-label">&nbsp;</span>
         <button class="btn" id="btn-csv">匯出 CSV</button>
       </div>
@@ -302,12 +301,25 @@
     <div class="panel">
       <div class="panel-head">
         <h2>加權指數</h2>
-        <div class="seg" id="seg-chart" role="group" aria-label="主圖樣式">
-          <button data-v="line">線圖</button>
-          <button data-v="candle" aria-pressed="true">K 線</button>
+        <div class="panel-tools">
+          <label class="date-pick">起始日
+            <input type="date" id="zoom-start" aria-label="圖表起始日"></label>
+          <div class="seg" id="seg-chart" role="group" aria-label="主圖樣式">
+            <button data-v="line">線圖</button>
+            <button data-v="candle" aria-pressed="true">K 線</button>
+          </div>
         </div>
       </div>
-      <div id="chart"></div>
+      <!-- The 法人 control floats over the flow panels it switches, positioned
+           by renderChart() on that panel's title row. -->
+      <div class="chart-wrap">
+        <div id="chart"></div>
+        <div class="seg seg-sm chart-float" id="seg-desk" role="group" aria-label="法人買賣超對象">
+          <button data-v="foreign" aria-pressed="true">外資</button>
+          <button data-v="trust">投信</button>
+          <button data-v="dealer">自營商</button>
+        </div>
+      </div>
       <div class="legend">
         <span><i class="dot" id="lg-index" style="background:var(--c-index)"></i>加權指數</span>
         <span><i class="dot" style="background:var(--c-turnover)"></i>成交金額</span>
@@ -550,6 +562,12 @@
     const chg = i>0 && r.close!==null && rows[i-1].close!==null ? r.close-rows[i-1].close : null;
     const chgPct = (chg!==null && rows[i-1].close) ? chg/rows[i-1].close*100 : null;
     const chgColor = chg===null ? COLORS.ink2 : (chg>=0?COLORS.up:COLORS.down);
+    // Day-on-day margin change, shown in the same signed red/green form as the
+    // desk flows. A missing day on either side leaves it blank rather than
+    // diffing across the gap.
+    const m0 = i>0 ? rows[i-1].marginBalanceYi : null, m1 = r.marginBalanceYi;
+    const mChg = (m0===null||m0===undefined||m1===null||m1===undefined) ? null : m1-m0;
+    const mChgColor = mChg===null ? null : (mChg>=0?COLORS.up:COLORS.down);
 
     // Which correction window this day falls in
     let band='';
@@ -574,6 +592,7 @@
         }).join('')}
       ${li(deskName()+'累計', cumView[i]==='-' ? '—' : sgnYi(cumView[i],0), COLORS.cum)}
       ${li('融資餘額', yi(r.marginBalanceYi), COLORS.margin)}
+      ${li('融資增減', mChg===null ? '—' : `<span style="color:${mChgColor}">${sgnYi(mChg,1)}</span>`, mChgColor)}
       ${band}</div>`;
   }
 
@@ -651,7 +670,8 @@
          dataBackground:{lineStyle:{color:COLORS.zoomTrack}, areaStyle:{color:COLORS.line2}},
          selectedDataBackground:{lineStyle:{color:COLORS.zoomTrackOn}, areaStyle:{color:COLORS.zoomFill}},
          textStyle:{color:COLORS.ink3, fontSize:10},
-         labelFormatter: v => dates[Math.round(v)] ? dates[Math.round(v)].slice(0,7) : ''}
+         // Full date, so dragging a handle can land on an exact start day
+         labelFormatter: v => dates[Math.round(v)] ? fd(dates[Math.round(v)]) : ''}
       ],
       series:[
         mainSeries(),
@@ -682,6 +702,12 @@
       ]
     };
     chart.setOption(opt, {notMerge:true});
+
+    // Pin the 法人 control to the right end of the daily-flow panel's title row.
+    const deskSeg = document.getElementById('seg-desk');
+    deskSeg.style.top   = (L.grids[FLOW].top - 30) + 'px';
+    deskSeg.style.right = L.right + 'px';
+    syncStartInput();
 
     // Keep the legend swatch honest: in candlestick mode the index is drawn in
     // the red/green up-down pair, not the neutral line colour.
@@ -1079,6 +1105,22 @@
   // chart is rebuilt — the table, the selection and the zoom all stay put.
   segHandler('seg-chart',     v=>{ chartType = v; }, renderChart);
 
+  // Start-day picker: jump the left edge of the view to the first session on or
+  // after the chosen date, keeping the right edge where it is.
+  const startInput = document.getElementById('zoom-start');
+  startInput.min = dates[0]; startInput.max = dates[N-1];
+  function syncStartInput(){ startInput.value = dates[zoomRange ? zoomRange.s : 0]; }
+  startInput.addEventListener('change', ()=>{
+    const v = startInput.value;
+    if(!v){ syncStartInput(); return; }
+    let s = dates.findIndex(d => d >= v);
+    if(s < 0) s = N-1;
+    let e = zoomRange ? zoomRange.e : N-1;
+    if(e <= s) e = N-1;
+    if(s >= e) s = Math.max(0, e-1);
+    chart.dispatchAction({type:'dataZoom', startValue:s, endValue:e});
+  });
+
   // Keep zoomRange in step with pans and wheel-zooms, so a later rebuild
   // (e.g. toggling to candlesticks) doesn't throw away where the user is looking.
   let cumTimer = null;
@@ -1093,6 +1135,7 @@
       e = dz.end   / 100 * (N-1);
     }
     zoomRange = (s <= 0 && e >= N-1) ? null : {s:Math.round(s), e:Math.round(e)};
+    syncStartInput();
 
     clearTimeout(cumTimer);
     cumTimer = setTimeout(()=>{
