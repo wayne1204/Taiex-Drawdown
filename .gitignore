@@ -20,3 +20,6 @@ vendor/
 # Editor/local
 *.swp
 .claude/settings.local.json
+
+# Cron lock for update_data.sh
+.update_data.lock
