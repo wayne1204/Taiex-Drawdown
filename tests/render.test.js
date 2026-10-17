@@ -308,7 +308,11 @@ module.exports = {
 
         // ── 9. Chart-type toggle ──────────────────────────────────────────
         const typeOfMain = () => (chart.getOption().series || [])[0].type;
-        t.eq("main series starts as a line", typeOfMain(), "line");
+        t.eq("main series starts as candlesticks (K 線 is the default)", typeOfMain(), "candlestick");
+        t.eq("default chart-type button is K 線",
+          doc.querySelector("#seg-chart button[aria-pressed='true']").dataset.v, "candle");
+        doc.querySelector("#seg-chart button[data-v='line']").click();
+        t.eq("chart-type toggle flips the main series to a line", typeOfMain(), "line");
 
         doc.querySelector("#seg-chart button[data-v='candle']").click();
         t.eq("chart-type toggle flips the main series to candlestick", typeOfMain(), "candlestick");

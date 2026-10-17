@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>台股大盤修正波段分析 · TAIEX Drawdown Atlas</title>
+<!-- Inline so the icon survives file://, the offline bundle and the 3-file deploy:
+     dashed prior high, a green fall to the trough, a red recovery back to it. -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231a1a19'/%3E%3Cpath d='M5 9H27' stroke='%238a897e' stroke-width='1.5' stroke-dasharray='2 2'/%3E%3Cpath d='M5 9L11 14L14 12L18 24' fill='none' stroke='%231baf7a' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M18 24L23 16L27 9' fill='none' stroke='%23e66767' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
 <style>
   :root{
@@ -300,8 +303,8 @@
       <div class="panel-head">
         <h2>加權指數</h2>
         <div class="seg" id="seg-chart" role="group" aria-label="主圖樣式">
-          <button data-v="line" aria-pressed="true">線圖</button>
-          <button data-v="candle">K 線</button>
+          <button data-v="line">線圖</button>
+          <button data-v="candle" aria-pressed="true">K 線</button>
         </div>
       </div>
       <div id="chart"></div>
@@ -428,7 +431,7 @@
     window.TaiexDetect.detectEpisodes(rows, threshold, mode, {tol: recoverTol});
 
   // ── State ─────────────────────────────────────────────────
-  let threshold = 0.07, mode = 'close', chartType = 'line';
+  let threshold = 0.07, mode = 'close', chartType = 'candle';
   // Recovery tolerance: coming within this much of the prior peak counts as
   // reclaiming it. Lets two crashes that share a peak separate.
   let recoverTol = 0.03;
