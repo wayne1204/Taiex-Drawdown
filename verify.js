@@ -104,9 +104,15 @@ if (bear22.length === 1) {
         `${b.declineDays} trading days`);
 }
 
-// Latest episode must be flagged ongoing with a blank recovery count.
+// Only the latest episode may be open, and an open one has no recovery yet.
+// Whether it IS open depends on the market, so accept either state.
 const last = eps[eps.length - 1];
-check("latest episode is ongoing", last.status === "ongoing" && last.recoveryDays === null,
+check("only the latest episode can be ongoing",
+      eps.slice(0, -1).every(e => e.status !== "ongoing"));
+check("latest episode's status matches its recovery fields",
+      last.status === "ongoing"
+        ? last.recoveryDays === null && last.recoverDate === null
+        : last.recoveryDays !== null && last.recoverDate !== null,
       `${last.peakDate} -> ${last.troughDate}, status ${last.status}`);
 
 // Every closed episode must genuinely have reclaimed its peak.
@@ -145,7 +151,7 @@ const REF = [
     into: "2024-07", why: "2025-01 high of 23,943 never cleared the 2024-07 peak" },
   { ym: "2026-02", peak: 35521,    trough: 31529,    dd: -11.0, expect: "own" },
   { ym: "2026-07", peak: 47425,    trough: 42450,    dd: -10.5, expect: "deeper",
-    why: "still ongoing and has since traded below the 7/20 low" }
+    why: "ran below the 7/20 low before recovering" }
 ];
 
 const near = (a, b) => Math.abs(a - b) / b <= 0.04;

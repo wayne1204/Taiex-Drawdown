@@ -29,7 +29,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
  * to svg, and a canvas/layout stub prepended so it runs before any page
  * script — including the one that calls echarts.init().
  */
-function buildHtml() {
+function buildHtml(dataJs = read("data/taiex-daily.js")) {
   let html = read("index.html");
 
   // ECharts measures text via canvas even under the SVG renderer, and jsdom
@@ -86,7 +86,7 @@ function buildHtml() {
   html = html.replace(/<script src="https:\/\/cdn[^"]*"><\/script>/,
     `<script>${echartsSrc}</script>`);
   html = html.replace('<script src="data/taiex-daily.js"></script>',
-    `<script>${read("data/taiex-daily.js")}</script>`);
+    `<script>${dataJs}</script>`);
   html = html.replace('<script src="detect.js"></script>',
     `<script>${read("detect.js")}</script>`);
 
@@ -103,6 +103,26 @@ function zoomOf(chart) {
 }
 const spanOf = z => (typeof z.s === "number" && typeof z.e === "number")
   ? z.e - z.s : (z.end - z.start) / 100 * 1350;
+
+/**
+ * The live data only has an open correction some of the time, so the
+ * current-episode section cannot be tested against it reliably. Cut the live
+ * series off at the trough of its latest 7% episode instead: that episode is
+ * then open by construction, whatever the market has done since.
+ */
+function openEpisodeDataJs() {
+  const vm = require("vm");
+  const { detectEpisodes } = require("../detect.js");
+  const sandbox = { window: {} };
+  vm.runInNewContext(read("data/taiex-daily.js"), sandbox);
+  const { TAIEX_DATA: data, TAIEX_META: meta } = sandbox.window;
+
+  const eps = detectEpisodes(data, 0.07, "close", { tol: 0.03 });
+  const cut = data.slice(0, eps[eps.length - 1].troughIdx + 1);
+  const cutMeta = { ...meta, end: cut[cut.length - 1].date, tradingDays: cut.length };
+  return `window.TAIEX_META=${JSON.stringify(cutMeta)};\n` +
+         `window.TAIEX_DATA=${JSON.stringify(cut)};\n`;
+}
 
 module.exports = {
   name: "index.html — render & interaction",
@@ -406,33 +426,17 @@ module.exports = {
         // the table shows, or the page contradicts itself.
         {
           const ctx = doc.getElementById("ctx");
-          t.ok("context section is shown while a correction is open",
-            ctx && !ctx.hidden, ctx ? `hidden=${ctx.hidden}` : "missing");
-
-          const ctxRows = [...ctx.querySelectorAll(".ctx-row")];
-          t.eq("one strip per tracked metric", ctxRows.length, 5);
-
-          const eps = window.TaiexDetect.detectEpisodes(
-            window.TAIEX_DATA, 0.07, "close", { tol: 0.03 });
-          const open = eps.find(e => e.status === "ongoing");
-          t.ok("the detection really does have an open episode", !!open,
-            open ? `${open.peakDate} → ${open.troughDate}` : "none");
-
-          t.ok("every strip plots one dot per episode and marks exactly one",
-            ctxRows.every(r => r.querySelectorAll(".ctx-dot").length === eps.length &&
-                               r.querySelectorAll(".ctx-dot.on").length === 1),
-            ctxRows.map(r => r.querySelectorAll(".ctx-dot").length).join("/"));
-
-          // Rank shown for 跌幅 must equal the count of deeper episodes, +1.
-          const deeper = eps.filter(e => e.drawdownPct < open.drawdownPct).length;
-          const rankText = ctxRows[0].querySelector(".ctx-r").textContent;
-          t.ok("跌幅 rank counts the episodes that went deeper",
-            rankText.includes(`第 ${deeper + 1} `) && rankText.includes(`共 ${eps.length} `),
-            `${rankText.trim()} (deeper: ${deeper})`);
-
-          t.ok("caption warns the open episode's figures are still accruing",
-            /仍在累積/.test(ctx.querySelector(".ctx-sub").textContent),
-            ctx.querySelector(".ctx-sub").textContent.trim().slice(-24));
+          const open = window.TaiexDetect.detectEpisodes(
+            window.TAIEX_DATA, 0.07, "close", { tol: 0.03 })
+            .find(e => e.status === "ongoing");
+          if (open) {
+            t.ok("live data: context section is shown while a correction is open",
+              ctx && !ctx.hidden, ctx ? `hidden=${ctx.hidden} (${open.peakDate} → ${open.troughDate})` : "missing");
+          } else {
+            t.ok("live data: context section is hidden when no correction is open",
+              ctx && ctx.hidden && ctx.innerHTML === "",
+              ctx ? `hidden=${ctx.hidden}, ${ctx.innerHTML.length} chars` : "missing");
+          }
         }
 
         // ── Cumulative foreign net rebases to the visible window ─────────
@@ -592,6 +596,63 @@ module.exports = {
       }
       t.ok("CSV export button click does not throw",
         csvError === null, csvError ? String(csvError) : "ok");
+
+      // ── Current-episode context strip, on an open correction ───────────
+      // The KPI row states the live drawdown; this section is what makes it
+      // mean anything. Its ranks must be derived from the same episode list
+      // the table shows, or the page contradicts itself. Runs on a fixture
+      // that ends mid-correction (see openEpisodeDataJs) so it is exercised
+      // even while the live market has no open episode.
+      {
+        const fxErrors = [];
+        const fvc = new VirtualConsole();
+        fvc.on("jsdomError", e => fxErrors.push("jsdomError: " + (e.stack || e.message)));
+        fvc.on("error", (...a) => fxErrors.push("console.error: " + a.join(" ")));
+        const fx = new JSDOM(buildHtml(openEpisodeDataJs()), {
+          runScripts: "dangerously", pretendToBeVisual: true, virtualConsole: fvc
+        });
+        try {
+          await sleep(1500);
+          const fw = fx.window, fdoc = fw.document;
+          t.ok("open-correction fixture boots without errors", fxErrors.length === 0,
+            fxErrors.slice(0, 3).join(" || ") || "clean");
+
+          const eps = fw.TaiexDetect.detectEpisodes(
+            fw.TAIEX_DATA, 0.07, "close", { tol: 0.03 });
+          const open = eps.find(e => e.status === "ongoing");
+          t.ok("the fixture really does have an open episode", !!open,
+            open ? `${open.peakDate} → ${open.troughDate}` : "none");
+
+          const ctx = fdoc.getElementById("ctx");
+          t.ok("context section is shown while a correction is open",
+            ctx && !ctx.hidden, ctx ? `hidden=${ctx.hidden}` : "missing");
+
+          const ctxRows = ctx ? [...ctx.querySelectorAll(".ctx-row")] : [];
+          t.eq("one strip per tracked metric", ctxRows.length, 5);
+
+          if (open && ctxRows.length) {
+            t.ok("every strip plots one dot per episode and marks exactly one",
+              ctxRows.every(r => r.querySelectorAll(".ctx-dot").length === eps.length &&
+                                 r.querySelectorAll(".ctx-dot.on").length === 1),
+              ctxRows.map(r => r.querySelectorAll(".ctx-dot").length).join("/"));
+
+            // Rank shown for 跌幅 must equal the count of deeper episodes, +1.
+            const deeper = eps.filter(e => e.drawdownPct < open.drawdownPct).length;
+            const rankText = ctxRows[0].querySelector(".ctx-r").textContent;
+            t.ok("跌幅 rank counts the episodes that went deeper",
+              rankText.includes(`第 ${deeper + 1} `) && rankText.includes(`共 ${eps.length} `),
+              `${rankText.trim()} (deeper: ${deeper})`);
+
+            t.ok("caption warns the open episode's figures are still accruing",
+              /仍在累積/.test(ctx.querySelector(".ctx-sub").textContent),
+              ctx.querySelector(".ctx-sub").textContent.trim().slice(-24));
+          } else {
+            t.skip("context strip contents", "no open episode or no strips to inspect");
+          }
+        } finally {
+          fx.window.close();
+        }
+      }
 
     } finally {
       dom.window.close();
