@@ -209,11 +209,11 @@ module.exports = {
       t.ok("forward returns can be negative", e.fwd1mPct < 0, `${e.fwd1mPct.toFixed(1)}%`);
     }
 
-    // ── The rebound exit rule ──────────────────────────────────────────────
+    // ── A shared peak ──────────────────────────────────────────────────────
     {
       // Two crashes sharing one peak: 100 -> 80, bounce to 98 (never a new high),
-      // then 98 -> 70, then finally a new high. The strict rule must see ONE
-      // episode; a rebound rule loose enough to catch the +22.5% bounce sees two.
+      // then 98 -> 70, then finally a new high. Without a tolerance the bounce
+      // does not close anything, so this is ONE episode.
       const rows = series([100, 80, 98, 70, 101]);
 
       const strict = detectEpisodes(rows, 0.07, "close");
@@ -221,43 +221,13 @@ module.exports = {
       t.eq("strict: it keeps the deepest trough", strict[0].troughVal, 70);
       t.eq("strict: closed by a new high", strict[0].endReason, "newhigh");
 
-      const split = detectEpisodes(rows, 0.07, "close", 0.20);   // 80 -> 98 is +22.5%
-      t.eq("rebound: the same series splits in two", split.length, 2);
-      t.eq("rebound: first leg troughs at 80", split[0].troughVal, 80);
-      t.eq("rebound: first leg closed by the rebound", split[0].endReason, "rebound");
-      t.eq("rebound: second leg re-pegs to the lower high", split[1].peakVal, 98);
-      t.eq("rebound: second leg troughs at 70", split[1].troughVal, 70);
-      t.eq("rebound: second leg closed by a new high", split[1].endReason, "newhigh");
-
-      // A threshold above the actual bounce must NOT split it.
-      t.eq("rebound: a threshold above the bounce leaves it merged",
-           detectEpisodes(rows, 0.07, "close", 0.30).length, 1);
-    }
-
-    {
-      // Backwards compatibility: omitting the parameter, or passing null/0/NaN,
-      // must all mean "strict" — an accidental 0 must not split on every uptick.
-      const rows = series([100, 80, 98, 70, 101]);
-      const base = JSON.stringify(detectEpisodes(rows, 0.07, "close"));
-      for (const arg of [null, undefined, 0, -1, NaN, "0.2"]) {
+      // Omitting the options, or passing a non-object, must all mean "strict".
+      const base = JSON.stringify(strict);
+      for (const arg of [null, undefined, 0.2, "0.2"]) {
         const got = JSON.stringify(detectEpisodes(rows, 0.07, "close", arg));
-        // Compare full output but report only a verdict — printing two episode
-        // objects per case would bury the rest of the run.
         t.ok(`passing ${String(arg)} behaves as strict`, got === base,
              got === base ? "identical" : "DIFFERS from strict output");
       }
-    }
-
-    {
-      // A rebound-closed episode ends BELOW its peak, so its recoveryDays counts
-      // days-to-rebound rather than days-to-recover. Pin that it never claims to
-      // have reclaimed the peak.
-      const rows = series([100, 80, 98, 70, 101]);
-      const split = detectEpisodes(rows, 0.07, "close", 0.20);
-      const reb = split.find(e => e.endReason === "rebound");
-      t.ok("rebound exit lands below the prior peak",
-           rows[reb.recoverIdx].close < reb.peakVal,
-           `${rows[reb.recoverIdx].close} < ${reb.peakVal}`);
     }
 
     // ── Recovery tolerance ─────────────────────────────────────────────────
@@ -300,16 +270,6 @@ module.exports = {
              JSON.stringify(detectEpisodes(rows, 0.07, "close", {tol: bad})) === strict,
              "identical to strict");
       }
-    }
-
-    {
-      // The two exits are independent and composable.
-      const rows = series([100, 80, 98, 70, 101]);
-      const both = detectEpisodes(rows, 0.07, "close", {rebound: 0.20, tol: 0.03});
-      t.eq("rebound and tolerance can be combined", both.length, 2);
-      // The bounce to 98 satisfies BOTH (+22.5% off the low, 2% short of the peak).
-      // Recovery is checked first, so it must be attributed to tolerance.
-      t.eq("recovery is attributed before rebound", both[0].endReason, "tolerance");
     }
 
     // ── Threshold monotonicity on a fixed series ───────────────────────────

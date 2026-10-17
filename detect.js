@@ -28,33 +28,16 @@
    * @param rows        merged daily series from data/taiex-daily.json
    * @param threshold   e.g. 0.07 for a 7% correction
    * @param mode        'intraday' (high/low) or 'close'
-   * @param reboundPct  optional second exit rule, e.g. 0.20. Omit/null for the
-   *                    strict behaviour.
+   * @param opts        optional { tol }: the recovery tolerance, e.g. 0.03
    * @returns array of episode objects
    *
-   * Default rule: a rally *inside* an ongoing decline does not open a new
-   * episode. Only reclaiming the prior peak closes one out, so the whole 2022
-   * bear market is counted once rather than as four or five corrections.
-   *
-   * That rule cannot separate two crashes that share a peak. 2024-07 fell 19.5%,
-   * rebounded to within 1.94% of the peak, then fell again to -29.1% — because it
-   * never made a new high, both legs are necessarily one episode.
-   *
-   * Passing reboundPct adds a second way to close an episode: a rally of that
-   * much off the trough, even without a new high (the classic zigzag/swing rule).
-   * The trade-off is directly visible in the data — at 0.20 the 2024-07 and
-   * 2025-01 crashes separate while the 2022 bear market stays whole; at 0.10 the
-   * 2022 bear market itself splits in two, which is exactly what the strict rule
-   * exists to prevent. Every episode reports how it ended via `endReason`.
+   * A rally *inside* an ongoing decline does not open a new episode. Only
+   * reclaiming the prior peak closes one out, so the whole 2022 bear market is
+   * counted once rather than as four or five corrections. Every episode reports
+   * how it ended via `endReason`.
    */
-  function detectEpisodes(rows, threshold, mode, opts, tolArg) {
-    // Accepts either the legacy positional form (…, reboundPct, tolPct) or an
-    // options object { rebound, tol }.
-    let reboundIn = null, tolIn = 0;
-    if (typeof opts === "number") { reboundIn = opts; tolIn = tolArg; }
-    else if (opts && typeof opts === "object") { reboundIn = opts.rebound; tolIn = opts.tol; }
-
-    const rebound = (typeof reboundIn === "number" && reboundIn > 0) ? reboundIn : null;
+  function detectEpisodes(rows, threshold, mode, opts) {
+    const tolIn = opts && typeof opts === "object" ? opts.tol : 0;
     // Recovery tolerance: how close to the prior peak counts as reclaiming it.
     // Clamped to [0, 0.5) — a tolerance at or above the drawdown threshold would
     // let an episode close on the very day it opened.
@@ -111,7 +94,6 @@
         status: ri === null ? "ongoing" : "recovered",
         // "newhigh"   - cleared the prior peak outright (a true recovery)
         // "tolerance" - came within the recovery tolerance of the peak
-        // "rebound"   - closed by the rebound rule while still below the peak
         // "ongoing" - never closed
         endReason: endReason || (ri === null ? "ongoing" : "newhigh"),
         drawdownPct: ddPct,
@@ -144,18 +126,13 @@
         // getting within `tol` of the prior high counts as reclaiming it. This is
         // what separates two crashes that share a peak — 2025-01 rebounded to
         // within 1.94% of the 2024-07 high, which a 3% tolerance accepts.
-        const reclaimed = h >= peakVal * (1 - tol);
-        // Rebound exit: measured off the trough, not off the peak
-        const bounced = rebound !== null && (h - trVal) / trVal >= rebound;
-        if (reclaimed || bounced) {
+        if (h >= peakVal * (1 - tol)) {
           out.push(build(peakIdx, peakVal, trIdx, trVal, i,
-                         !reclaimed ? "rebound"
-                                    : (h >= peakVal ? "newhigh" : "tolerance")));
+                         h >= peakVal ? "newhigh" : "tolerance"));
           inCorr = false;
-          // Either way the running peak resets to today's high. On a rebound exit
-          // that is BELOW the old peak, which is the point: subsequent declines
-          // are then measured from the lower high instead of being swallowed by
-          // the original episode.
+          // The running peak resets to today's high. On a tolerance exit that is
+          // just BELOW the old peak, so the next decline is measured from it
+          // instead of being swallowed by the original episode.
           peakVal = h; peakIdx = i;
         }
       }

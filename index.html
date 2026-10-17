@@ -242,15 +242,6 @@
         </div>
       </div>
       <div>
-        <span class="ctrl-label">波段切分</span>
-        <div class="seg" id="seg-split" role="group" aria-label="波段切分方式">
-          <button data-v="newhigh" aria-pressed="true">創新高</button>
-          <button data-v="0.25">反彈25%</button>
-          <button data-v="0.20">反彈20%</button>
-          <button data-v="0.15">反彈15%</button>
-        </div>
-      </div>
-      <div>
         <span class="ctrl-label">法人</span>
         <div class="seg" id="seg-desk" role="group" aria-label="法人買賣超對象">
           <button data-v="foreign" aria-pressed="true">外資</button>
@@ -434,13 +425,10 @@
   // Correction detection lives in detect.js so the browser and verify.js run
   // the exact same code path.
   const detect = (threshold, mode) =>
-    window.TaiexDetect.detectEpisodes(rows, threshold, mode,
-      {rebound: splitRebound, tol: recoverTol});
+    window.TaiexDetect.detectEpisodes(rows, threshold, mode, {tol: recoverTol});
 
   // ── State ─────────────────────────────────────────────────
   let threshold = 0.07, mode = 'close', chartType = 'line';
-  // null = strict "only a new high ends an episode"; a number adds the rebound exit
-  let splitRebound = null;
   // Recovery tolerance: coming within this much of the prior peak counts as
   // reclaiming it. Lets two crashes that share a peak separate.
   let recoverTol = 0.03;
@@ -796,7 +784,7 @@
 
   // ── KPI cards ─────────────────────────────────────────────
   function renderKpis(){
-    // A tolerance or rebound close ends an episode (so the next decline is
+    // A tolerance close ends an episode (so the next decline is
     // tracked separately) without the price actually reclaiming the old high -
     // status alone can't tell them apart from a genuine recovery. "Recovered"
     // for stats purposes means endReason 'newhigh': price >= the prior peak.
@@ -892,11 +880,10 @@
     {k:'declineDays', t:'下跌天數',  f:e=>nf(e.declineDays,0)},
     {k:'recoveryDays',t:'收復天數', f:e=> e.recoveryDays===null
         ? '<span class="tag">進行中</span>'
-        // A rebound exit ends the episode while still BELOW the prior peak, so the
-        // count is days-to-rebound, not days-to-recover. Label it rather than let
-        // the two be read as the same thing.
+        // A tolerance exit ends the episode just BELOW the prior peak, so the
+        // count is days-to-tolerance, not days-to-new-high. Label it rather than
+        // let the two be read as the same thing.
         : nf(e.recoveryDays,0) + (
-            e.endReason==='rebound'   ? ' <span class="tag alt">反彈</span>' :
             e.endReason==='tolerance' ? ' <span class="tag alt">容差</span>' : '')},
     {k:'avgTurnoverYi', t:'區間日均量',  f:e=>nf(e.avgTurnoverYi,0)},
     {k:'turnoverChgPct',t:'量能變化', f:e=> e.turnoverChgPct===null?'—'
@@ -1063,7 +1050,6 @@
   }
   segHandler('seg-threshold', v=>{ threshold = parseFloat(v); });
   segHandler('seg-mode',      v=>{ mode = v; });
-  segHandler('seg-split',     v=>{ splitRebound = v==='newhigh' ? null : parseFloat(v); });
   segHandler('seg-tol',       v=>{ recoverTol = parseFloat(v); });
   // Switching desk changes only what the two flow panels plot — the episodes,
   // the table and the selection are all unaffected, so skip the full recompute.
@@ -1119,7 +1105,6 @@
       e.fwd1mPct?.toFixed(1), e.fwd3mPct?.toFixed(1), e.fwd1yPct?.toFixed(1),
       e.killRatio?.toFixed(2),
       e.status==='ongoing' ? '進行中'
-        : e.endReason==='rebound' ? '反彈收盤'
         : e.endReason==='tolerance' ? '容差收盤'
         : '創新高'
     ].map(esc).join(','));

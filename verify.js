@@ -214,10 +214,10 @@ const bearIntact = eps2 => {
 };
 
 // ── Recovery tolerance ─────────────────────────────────────────────────────
-// Treating "within tol of the prior peak" as reclaimed is the other way to
-// separate two crashes that share a peak, and it is what the UI now defaults to
-// (3%). It is a sharper knife than the rebound rule: the running peak ratchets
-// DOWN to each tolerant close, so the effect compounds along the series.
+// Treating "within tol of the prior peak" as reclaimed is how two crashes that
+// share a peak get separated, and it is what the UI defaults to (3%). The
+// running peak ratchets DOWN to each tolerant close, so the effect compounds
+// along the series.
 console.log("\nRecovery tolerance (within N% of the peak counts as reclaimed)");
 for (const T of [0, 0.01, 0.02, 0.03, 0.05]) {
   const e2 = detectEpisodes(rows, 0.07, "intraday", { tol: T });
@@ -246,54 +246,8 @@ check("tol=0 is byte-identical to passing nothing",
       JSON.stringify(detectEpisodes(rows, 0.07, "intraday", { tol: 0 })) ===
       JSON.stringify(detectEpisodes(rows, 0.07, "intraday")));
 
-// ── The rebound split rule ─────────────────────────────────────────────────
-// The strict rule cannot separate two crashes that share a peak, which is why
-// 2023-08 and 2025-01 come out merged above. Adding a rebound exit separates
-// them — but push it too far and it starts chopping up the 2022 bear market,
-// which is the thing the strict rule exists to protect. These assertions pin
-// both ends of that trade-off.
-console.log("\nRebound split rule (second exit: a rally of N% off the trough)");
-
-
-for (const R of [null, 0.25, 0.20, 0.15, 0.10]) {
-  const e2 = detectEpisodes(rows, 0.07, "intraday", R);
-  const label = R === null ? "off      " : `+${(R * 100).toFixed(0)}%     `.slice(0, 9);
-  console.log(`  ${label} ${String(e2.length).padStart(2)} episodes` +
-    `   2022 intact: ${bearIntact(e2) ? "yes" : "NO"}` +
-    `   closed by rebound: ${e2.filter(x => x.endReason === "rebound").length}`);
-}
-
-const r20 = detectEpisodes(rows, 0.07, "intraday", 0.20);
-check("20% rebound keeps the 2022 bear market as one episode", bearIntact(r20));
-check("15% rebound still keeps it intact", bearIntact(detectEpisodes(rows, 0.07, "intraday", 0.15)));
-check("10% rebound splits the 2022 bear market (why the default is strict)",
-      !bearIntact(detectEpisodes(rows, 0.07, "intraday", 0.10)),
-      detectEpisodes(rows, 0.07, "intraday", 0.10)
-        .filter(e => e.peakDate.startsWith("2022-01") || e.peakDate.startsWith("2022-08"))
-        .map(e => `${e.peakDate}→${e.troughDate} ${e.drawdownPct.toFixed(1)}%`).join(" + "));
-
-// At 20% every event in the spec's reference table should surface on its own,
-// which the strict rule cannot do for 2023-08 and 2025-01.
-const has = (ym, lo, hi) => r20.some(e =>
-  e.peakDate.slice(0, 7) === ym && e.drawdownPct <= lo && e.drawdownPct >= hi);
-check("  2024-07 separates as its own ~-19.5% episode", has("2024-07", -17, -22),
-      r20.filter(e => e.peakDate.startsWith("2024-07"))
-         .map(e => `${e.peakDate}→${e.troughDate} ${e.drawdownPct.toFixed(1)}%`).join(" | "));
-check("  2025-01 separates as its own ~-28% episode", has("2025-01", -25, -31),
-      r20.filter(e => e.peakDate.startsWith("2025-01"))
-         .map(e => `${e.peakDate}→${e.troughDate} ${e.drawdownPct.toFixed(1)}%`).join(" | "));
-check("  2023-08 resurfaces as its own episode",
-      r20.some(e => e.peakDate >= "2023-07-01" && e.peakDate < "2023-09-01"),
-      r20.filter(e => e.peakDate.startsWith("2023"))
-         .map(e => `${e.peakDate}→${e.troughDate} ${e.drawdownPct.toFixed(1)}%`).join(" | "));
 check("every episode reports how it ended",
-      r20.every(e => ["newhigh", "rebound", "ongoing"].includes(e.endReason)));
-check("rebound-closed episodes did NOT reclaim their peak",
-      r20.filter(e => e.endReason === "rebound")
-         .every(e => rows[e.recoverIdx].high < e.peakVal));
-check("strict mode is unchanged by the new parameter",
-      JSON.stringify(detectEpisodes(rows, 0.07, "intraday")) ===
-      JSON.stringify(detectEpisodes(rows, 0.07, "intraday", null)));
+      tol3.every(e => ["newhigh", "tolerance", "ongoing"].includes(e.endReason)));
 
 // ── Threshold / mode sweep ─────────────────────────────────────────────────
 console.log("\nThreshold & price-basis sweep (counts should fall as threshold rises)");

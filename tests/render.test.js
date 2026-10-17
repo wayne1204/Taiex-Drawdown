@@ -234,8 +234,7 @@ module.exports = {
         doc.querySelector("#seg-threshold button[aria-pressed='true']").dataset.v, "0.07");
       t.eq("default recovery tolerance is 3%",
         doc.querySelector("#seg-tol button[aria-pressed='true']").dataset.v, "0.03");
-      t.eq("default split rule is new-high",
-        doc.querySelector("#seg-split button[aria-pressed='true']").dataset.v, "newhigh");
+      t.ok("the 波段切分 control is gone", !doc.getElementById("seg-split"));
 
       doc.querySelector("#seg-threshold button[data-v='0.05']").click();
       const after5pct = rowCount();
@@ -275,8 +274,7 @@ module.exports = {
           window.TAIEX_DATA,
           parseFloat(pressed("seg-threshold")),
           pressed("seg-mode"),
-          { rebound: pressed("seg-split") === "newhigh" ? null : parseFloat(pressed("seg-split")),
-            tol: parseFloat(pressed("seg-tol")) });
+          { tol: parseFloat(pressed("seg-tol")) });
         t.eq("expected-episode list matches the rendered row count",
              EPS.length, doc.querySelectorAll("#tbody tr").length);
         const rowAt = n => doc.querySelectorAll("#tbody tr")[n]; // re-query: tbody is replaced wholesale on every render
