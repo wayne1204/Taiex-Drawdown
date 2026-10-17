@@ -292,7 +292,7 @@
         <span><i class="dot" style="background:var(--ink-4)"></i>已收復波段</span>
         <span><i class="dot" style="background:var(--c-cum)"></i>進行中</span>
         <span><i class="dot" style="background:var(--c-turnover)"></i>表格選取中</span>
-        <span class="ctx-sub">游標移到線上可看是哪一波</span>
+        <span class="ctx-sub">游標移到線上可看是哪一波，點擊可在表格中定位</span>
       </div>
     </div>
 
@@ -729,6 +729,9 @@
         name: `#${i+1} ${fd(e.peakDate)}`,
         type: 'line', data: ovPath(e), showSymbol: false,
         z, zlevel: 0, silent: false,
+        // Without this ECharts only fires events on symbols, and these lines
+        // have none — clicks on the line itself would never arrive.
+        triggerLineEvent: true, cursor: 'pointer',
         lineStyle: {width: on || live ? 2 : 1, color, opacity: on || live ? 1 : .5},
         emphasis: {focus: 'series', lineStyle: {width: 2.5, opacity: 1}},
         // A drawdown episode is a fall; 跌幅 in the label keeps the reader
@@ -979,6 +982,20 @@
     // zoomRange itself. Dispatching a zoom before this call would be discarded.
     renderChart(); renderOverlay(); renderTable();
   }
+
+  // Clicking a path in the overlay selects the same episode as its table row,
+  // then brings that row into view: the table sits above the overlay, so
+  // without the scroll the selection would happen off-screen.
+  overlay.on('click', p=>{
+    if(p.componentType !== 'series' || p.seriesIndex >= episodes.length) return;
+    select(p.seriesIndex);
+    if(selected < 0) return;
+    const tr = document.querySelector(`#tbody tr[data-i="${selected}"]`);
+    if(tr){
+      tr.scrollIntoView({block: 'center', behavior: 'smooth'});
+      tr.focus({preventScroll: true});
+    }
+  });
 
   document.getElementById('tbody').addEventListener('click', ev=>{
     const tr = ev.target.closest('tr'); if(!tr) return;

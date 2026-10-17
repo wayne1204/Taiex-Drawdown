@@ -62,6 +62,9 @@ function buildHtml(dataJs = read("data/taiex-daily.js")) {
       }
       return true;
     };
+    // jsdom has no scrolling; the overlay click handler scrolls its row into view.
+    Element.prototype.scrollIntoView = function(){};
+
     var SIZES = { chart: {w:1400, h:900}, overlay: {w:1400, h:340} };
     var sizeOf = function(el){
       return (SIZES[el.id] && visible(el)) ? SIZES[el.id] : {w:0, h:0};
@@ -367,6 +370,24 @@ module.exports = {
           t.ok("selecting a row highlights its path", sel.length >= 1,
             `${sel.length} highlighted`);
           rowAt(2).click();
+
+          // Clicking a path selects the same episode as its table row. ECharts
+          // only delivers clicks on a symbol-less line with triggerLineEvent.
+          t.ok("overlay paths accept clicks on the line itself",
+            paths().every(s => s.triggerLineEvent === true));
+          const k = eps.length - 1;
+          ov.trigger("click", { componentType: "series", seriesIndex: k });
+          const selRow = doc.querySelector('#tbody tr[aria-selected="true"]');
+          t.ok("clicking a path selects its table row",
+            selRow && +selRow.dataset.i === k,
+            selRow ? `row data-i=${selRow.dataset.i}, want ${k}` : "no row selected");
+          t.ok("the selected row takes focus", doc.activeElement === selRow);
+          ov.trigger("click", { componentType: "series", seriesIndex: k });
+          t.ok("clicking the same path again deselects",
+            !doc.querySelector('#tbody tr[aria-selected="true"]'));
+          ov.trigger("click", { componentType: "series", seriesIndex: eps.length });
+          t.ok("clicking the 100 reference line selects nothing",
+            !doc.querySelector('#tbody tr[aria-selected="true"]'));
 
           doc.querySelector("#seg-ov button[data-v='trough']").click();
           t.ok("trough alignment shows the approach into the low",
