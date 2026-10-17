@@ -23,3 +23,6 @@ vendor/
 
 # Cron lock for update_data.sh
 .update_data.lock
+
+# Cloudflare credentials for ./run.sh deploy
+.env

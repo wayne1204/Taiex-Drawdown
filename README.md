@@ -74,6 +74,35 @@ python3 bundle.py                         # 打包成單一離線 HTML
 `data/taiex-daily.json`，範圍外的日子原封不動保留。真要縮短序列請直接刪掉輸出檔
 再重抓。
 
+## 每日更新與部署
+
+`run.sh` 先增量抓取再起本機伺服器（`http://localhost:3001`，`--no-fetch` 跳過抓取）；
+`./run.sh deploy` 則發佈到 Cloudflare Pages。
+
+`update_data.sh` 是給 cron 用的包裝：加鎖避免重疊、日誌寫入 `fetch.log`（5 MB 輪替）、
+失敗時把日誌尾端印到 stderr 讓 cron 寄信。可選旗標：`--bundle` 重打包 `dist/`、
+`--commit` 資料有變才 commit、`--deploy` 發佈到 Cloudflare Pages。證交所約 19:00 才
+發佈籌碼資料，所以排在 20:00：
+
+```cron
+0 20 * * 1-5 /path/to/taiex-drawdown-atlas/update_data.sh --bundle --deploy --quiet
+```
+
+### Cloudflare Pages
+
+網站是純靜態檔，部署到 Pages 即可，不需要 Worker 或建置步驟。`./run.sh deploy` 只把頁面實際
+載入的三個檔案（`index.html`、`detect.js`、`data/taiex-daily.js`）複製到暫存目錄再上傳，
+`data/raw/`、日誌與測試都不會離開本機。
+
+```bash
+wrangler login                 # 只需一次；無瀏覽器環境改設 CLOUDFLARE_API_TOKEN
+./run.sh deploy                    # 首次會自動建立專案 → https://tw-stock-drawdown.pages.dev
+./run.sh deploy --branch preview   # 預覽部署，網址獨立，不影響正式站
+```
+
+專案名稱可用 `CF_PAGES_PROJECT` 覆寫。cron 環境沒有 nvm 的 PATH，`run.sh deploy` 會自己去
+`~/.nvm` 找 `wrangler`；`wrangler login` 的憑證存在家目錄，cron 一樣讀得到。
+
 ## 修正波段偵測演算法
 
 實作在 `detect.js`，由網頁與 `verify.js` **共用同一份程式碼**，兩邊不可能算出不同結果。
@@ -255,6 +284,8 @@ detect.js       修正波段偵測            （網頁與 Node 共用）
 verify.js       資料與演算法驗證        （node verify.js）
 index.html      儀表板                  （單一檔案，CDN 載入 ECharts）
 bundle.py       打包單一離線 HTML       （python3 bundle.py）
+run.sh          本機抓取 + 起伺服器      （./run.sh；./run.sh deploy 發佈到 Cloudflare Pages）
+update_data.sh  cron 用的每日更新        （--bundle / --commit / --deploy）
 package.json    僅測試用的 devDependency 與 npm scripts
 tests/
   run.js          測試執行器（含 SKIP 回報）

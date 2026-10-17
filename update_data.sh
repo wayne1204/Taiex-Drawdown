@@ -6,6 +6,7 @@
 #   ./update_data.sh --start 2026-01  Narrow the fetch window (see fetch_data.py)
 #   ./update_data.sh --bundle         Also rebuild dist/taiex-atlas-standalone.html
 #   ./update_data.sh --commit         git-commit the data files if they changed
+#   ./update_data.sh --deploy         Publish to Cloudflare Pages (see run.sh deploy)
 #   ./update_data.sh --quiet          Log only; do not echo progress to stdout
 #
 # Environment:
@@ -33,6 +34,7 @@ MAX_LOG_BYTES=$((5 * 1024 * 1024))
 
 DO_BUNDLE=0
 DO_COMMIT=0
+DO_DEPLOY=0
 QUIET=0
 START_ARGS=()
 
@@ -40,6 +42,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --bundle) DO_BUNDLE=1; shift ;;
     --commit) DO_COMMIT=1; shift ;;
+    --deploy) DO_DEPLOY=1; shift ;;
     --quiet)  QUIET=1; shift ;;
     --start)  START_ARGS=(--start "$2"); shift 2 ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -112,6 +115,13 @@ if (( DO_COMMIT )); then
       >>"$LOG" 2>&1 || fail "git commit failed"
     say "  committed refreshed data through ${LATEST% *}"
   fi
+fi
+
+if (( DO_DEPLOY )); then
+  if ! "$ROOT/run.sh" deploy >>"$LOG" 2>&1; then
+    fail "run.sh deploy exited non-zero"
+  fi
+  say "  deployed to Cloudflare Pages"
 fi
 
 say "[$(date '+%F %T')] update done"
