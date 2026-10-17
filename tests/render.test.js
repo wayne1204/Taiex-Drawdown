@@ -120,7 +120,7 @@ function openEpisodeDataJs() {
   vm.runInNewContext(read("data/taiex-daily.js"), sandbox);
   const { TAIEX_DATA: data, TAIEX_META: meta } = sandbox.window;
 
-  const eps = detectEpisodes(data, 0.07, "close", { tol: 0.03 });
+  const eps = detectEpisodes(data, 0.07, "close", { tol: 0 });
   const cut = data.slice(0, eps[eps.length - 1].troughIdx + 1);
   const cutMeta = { ...meta, end: cut[cut.length - 1].date, tradingDays: cut.length };
   return `window.TAIEX_META=${JSON.stringify(cutMeta)};\n` +
@@ -235,8 +235,8 @@ module.exports = {
         doc.querySelector("#seg-mode button[aria-pressed='true']").dataset.v, "close");
       t.eq("default threshold button is 7%",
         doc.querySelector("#seg-threshold button[aria-pressed='true']").dataset.v, "0.07");
-      t.eq("default recovery tolerance is 3%",
-        doc.querySelector("#seg-tol button[aria-pressed='true']").dataset.v, "0.03");
+      t.eq("default recovery tolerance is 嚴格",
+        doc.querySelector("#seg-tol button[aria-pressed='true']").dataset.v, "0");
       t.ok("the 波段切分 control is gone", !doc.getElementById("seg-split"));
 
       doc.querySelector("#seg-threshold button[data-v='0.05']").click();
@@ -348,7 +348,7 @@ module.exports = {
 
           const paths = () => (ov.getOption().series || []).filter(s => s.data && s.data.length);
           const eps = window.TaiexDetect.detectEpisodes(
-            window.TAIEX_DATA, 0.07, "close", { tol: 0.03 });
+            window.TAIEX_DATA, 0.07, "close", { tol: 0 });
           t.eq("one path per episode", paths().length, eps.length);
 
           const classes = new Set(paths().map(s => s.lineStyle.color));
@@ -450,7 +450,7 @@ module.exports = {
         {
           const ctx = doc.getElementById("ctx");
           const open = window.TaiexDetect.detectEpisodes(
-            window.TAIEX_DATA, 0.07, "close", { tol: 0.03 })
+            window.TAIEX_DATA, 0.07, "close", { tol: 0 })
             .find(e => e.status === "ongoing");
           if (open) {
             t.ok("live data: context section is shown while a correction is open",
@@ -641,7 +641,7 @@ module.exports = {
             fxErrors.slice(0, 3).join(" || ") || "clean");
 
           const eps = fw.TaiexDetect.detectEpisodes(
-            fw.TAIEX_DATA, 0.07, "close", { tol: 0.03 });
+            fw.TAIEX_DATA, 0.07, "close", { tol: 0 });
           const open = eps.find(e => e.status === "ongoing");
           t.ok("the fixture really does have an open episode", !!open,
             open ? `${open.peakDate} → ${open.troughDate}` : "none");

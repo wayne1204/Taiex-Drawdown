@@ -238,10 +238,10 @@
       <div>
         <span class="ctrl-label">收復認定</span>
         <div class="seg" id="seg-tol" role="group" aria-label="收復認定容差">
-          <button data-v="0">嚴格</button>
+          <button data-v="0" aria-pressed="true">嚴格</button>
           <button data-v="0.01">1%</button>
           <button data-v="0.02">2%</button>
-          <button data-v="0.03" aria-pressed="true">3%</button>
+          <button data-v="0.03">3%</button>
         </div>
       </div>
       <div>
@@ -434,7 +434,7 @@
   let threshold = 0.07, mode = 'close', chartType = 'candle';
   // Recovery tolerance: coming within this much of the prior peak counts as
   // reclaiming it. Lets two crashes that share a peak separate.
-  let recoverTol = 0.03;
+  let recoverTol = 0;
   let episodes = [], selected = -1;
   let sortKey = null, sortAsc = false;
 
