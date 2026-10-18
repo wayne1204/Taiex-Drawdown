@@ -79,7 +79,7 @@ fetch_data.py   →   data/taiex-daily.{json,js}   →   index.html
 | 主力買賣超、券商分點買賣超前 15 名（1/5/20/60 日） | [富邦 e-Broker](https://fubon-ebrokerdj.fbs.com.tw/z/zc/zco/zco_2327.djhtm) | 日 |
 
 ```bash
-echo 2330 >> stocks.txt          # 加入觀察清單（僅支援上市股票，上櫃不在 TWSE 資料內）
+echo 2317 >> stocks.txt          # 加入觀察清單（第一檔為預設開啟；僅支援上市股票）
 python3 fetch_stocks.py          # 預設抓 12 個月；--months 24 加深、--stocks 2327,2330 臨時指定
 ```
 
