@@ -7,6 +7,12 @@
 <!-- Inline so the icon survives file://, the offline bundle and the 3-file deploy:
      dashed prior high, a green fall to the trough, a red recovery back to it. -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231a1a19'/%3E%3Cpath d='M5 9H27' stroke='%238a897e' stroke-width='1.5' stroke-dasharray='2 2'/%3E%3Cpath d='M5 9L11 14L14 12L18 24' fill='none' stroke='%231baf7a' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M18 24L23 16L27 9' fill='none' stroke='%23e66767' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<script>
+  // Before first paint, so a saved light theme never flashes dark. Shared by
+  // index.html and stock.html (same origin, same key).
+  (function(){ var t; try { t = localStorage.getItem('atlas-theme'); } catch(e) {}
+    document.documentElement.dataset.theme = t === 'light' ? 'light' : 'dark'; })();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
 <style>
   :root{
@@ -38,6 +44,26 @@
     --zoom-track:#3a3a34; --zoom-track-on:#5a5a52; --zoom-fill:#2e2e28;
     --c-band-on:rgba(230,103,103,.30);   /* correction mask, selected episode */
     --band-label:#ffb4b4; --band-label-off:#8a6a6a;
+    --tag-bg:#3a2a1a; --tag-ink:#eda100; --tag-line:#5a4020;
+    --tag2-bg:#1e2a33; --tag2-ink:#6da7ec; --tag2-line:#26435e;
+    --err-bg:#2b1a1a; --err-line:#5a2a2a; --err-ink:#f0c0c0;
+    color-scheme:dark;
+  }
+  /* Light theme: same roles, re-picked for a white surface (deeper hues so
+     lines and red/green bars keep their contrast). */
+  :root[data-theme="light"]{
+    --bg:#f6f5f1; --surface:#ffffff; --surface-2:#efeee8; --line:#dddbd2;
+    --ink:#1b1b18; --ink-2:#45443e; --ink-3:#6f6e65;
+    --c-up:#d13c3c; --c-down:#0e8a5c;
+    --line-2:#eeede7; --ink-4:#b9b8ae; --axis-pointer:#8f8e84;
+    --zoom-track:#cfcdc4; --zoom-track-on:#a9a79d; --zoom-fill:#e6e4dc;
+    --err-bg:#fdeeee; --err-line:#f0c4c4; --err-ink:#8a2222;
+    color-scheme:light;
+    --c-index:#45443e; --c-turnover:#2468c4; --c-cum:#a86a00; --c-margin:#6a5bd6;
+    --row-hover:#f3f2ec; --row-sel:#fbeeee;
+    --c-band-on:rgba(209,60,60,.22); --band-label:#b02a2a; --band-label-off:#b08a8a;
+    --tag-bg:#fdf1dc; --tag-ink:#8a5a00; --tag-line:#eed6a8;
+    --tag2-bg:#e6f0fb; --tag2-ink:#1f5fae; --tag2-line:#bcd4ef;
   }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
@@ -99,7 +125,7 @@
   .panel-tools{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
   .date-pick{display:inline-flex;align-items:center;gap:7px;color:var(--ink-3);font-size:12px}
   .date-pick input{background:var(--bg);color:var(--ink);border:1px solid var(--line);
-    border-radius:7px;padding:4px 8px;font:inherit;font-size:13px;color-scheme:dark}
+    border-radius:7px;padding:4px 8px;font:inherit;font-size:13px}
   .chart-wrap{position:relative}
   .chart-float{position:absolute;z-index:2;background:var(--bg)}
   .seg-sm button{padding:2px 9px;font-size:12px}
@@ -164,13 +190,13 @@
   .neg{color:var(--c-down)}   /* Taiwan convention: green = down / net sell / decrease */
   .pos{color:var(--c-up)}     /* Taiwan convention: red = up / net buy / increase */
   .tag{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;
-    background:#3a2a1a;color:#eda100;border:1px solid #5a4020}
-  .tag.alt{background:#1e2a33;color:#6da7ec;border-color:#26435e}
+    background:var(--tag-bg);color:var(--tag-ink);border:1px solid var(--tag-line)}
+  .tag.alt{background:var(--tag2-bg);color:var(--tag2-ink);border-color:var(--tag2-line)}
   .ratio{border-radius:5px;padding:2px 8px;display:inline-block;min-width:52px}
   .pending{color:var(--ink-3);font-size:11.5px}
   footer{color:var(--ink-3);font-size:12px;margin-top:26px;line-height:1.7}
   code{background:var(--surface-2);padding:1.5px 5px;border-radius:4px;font-size:12px}
-  .err{background:#2b1a1a;border:1px solid #5a2a2a;color:#f0c0c0;padding:18px 20px;
+  .err{background:var(--err-bg);border:1px solid var(--err-line);color:var(--err-ink);padding:18px 20px;
     border-radius:10px;line-height:1.7}
 
   /* Sort control — only needed where the sticky headers are hidden */
@@ -267,6 +293,10 @@
       <div>
         <span class="ctrl-label">&nbsp;</span>
         <button class="btn" id="btn-csv">匯出 CSV</button>
+      </div>
+      <div>
+        <span class="ctrl-label">&nbsp;</span>
+        <button class="btn" id="btn-theme" aria-label="切換深淺色">淺色</button>
       </div>
     </div>
   </header>
@@ -375,7 +405,10 @@
 
   const CSS = getComputedStyle(document.documentElement);
   const C = k => CSS.getPropertyValue(k).trim();
-  const COLORS = {
+  // Filled by readColors(), and refilled when the theme changes: every
+  // renderer reads COLORS at draw time, so a redraw picks up the new palette.
+  const COLORS = {}, BAND = {};
+  function readColors(){ Object.assign(COLORS, {
     index:C('--c-index'), turnover:C('--c-turnover'), cum:C('--c-cum'),
     margin:C('--c-margin'), up:C('--c-up'), down:C('--c-down'),
     ink:C('--ink'), ink2:C('--ink-2'), ink3:C('--ink-3'),
@@ -383,7 +416,10 @@
     ink4:C('--ink-4'), pointer:C('--axis-pointer'), bandOn:C('--c-band-on'),
     bandLabel:C('--band-label'), bandLabelOff:C('--band-label-off'),
     zoomTrack:C('--zoom-track'), zoomTrackOn:C('--zoom-track-on'), zoomFill:C('--zoom-fill')
-  };
+  });
+  // The correction mask, at its three weights.
+  Object.assign(BAND, {main:alpha(COLORS.up,.13), sub:alpha(COLORS.up,.09), on:COLORS.bandOn});
+  }
   // rgba() from one of the hex vars above, so a tint stays tied to its source
   // colour instead of being restated as a literal that silently goes stale.
   const alpha = (hex, a) => {
@@ -391,8 +427,7 @@
     const n = parseInt(h.length===3 ? h.split('').map(c=>c+c).join('') : h, 16);
     return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
   };
-  // The correction mask, at its three weights.
-  const BAND = {main:alpha(COLORS.up,.13), sub:alpha(COLORS.up,.09), on:COLORS.bandOn};
+  readColors();
 
   // ── Data loading ──────────────────────────────────────────
   const rows = window.TAIEX_DATA;
@@ -1327,6 +1362,24 @@
     (META.generatedAt ? ` · 更新於 ${META.generatedAt.replace('T',' ')}` : '');
 
   recompute();
+
+  // ── Theme ─────────────────────────────────────────────────
+  const themeBtn = document.getElementById('btn-theme');
+  const syncThemeBtn = () => {
+    const dark = document.documentElement.dataset.theme !== 'light';
+    themeBtn.textContent = dark ? '☀ 淺色' : '☾ 深色';
+    themeBtn.setAttribute('aria-pressed', dark ? 'false' : 'true');
+  };
+  syncThemeBtn();
+  themeBtn.addEventListener('click', ()=>{
+    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('atlas-theme', next); } catch(e) {}
+    syncThemeBtn();
+    readColors();
+    // Redraw in place: selection, zoom and sort all survive a theme change.
+    renderKpis(); renderContext(); renderChart(); renderOverlay(); renderTable();
+  });
 
   // Re-measure once after first paint: the table can introduce a scrollbar, and
   // a late webfont can shift metrics, both of which change the container width.

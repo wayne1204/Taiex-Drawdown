@@ -6,6 +6,12 @@
 <title>個股籌碼監控 · TAIEX Atlas</title>
 <!-- Inline so the icon survives file:// and the deploy: one red and one green candle. -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231a1a19'/%3E%3Cpath d='M11 5V27M21 8V24' stroke='%238a897e' stroke-width='1.5'/%3E%3Crect x='7' y='10' width='8' height='12' rx='1' fill='%23e66767'/%3E%3Crect x='17' y='12' width='8' height='8' rx='1' fill='%231baf7a'/%3E%3C/svg%3E">
+<script>
+  // Before first paint, so a saved light theme never flashes dark. Shared by
+  // index.html and stock.html (same origin, same key).
+  (function(){ var t; try { t = localStorage.getItem('atlas-theme'); } catch(e) {}
+    document.documentElement.dataset.theme = t === 'light' ? 'light' : 'dark'; })();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
 <style>
   :root{
@@ -28,6 +34,20 @@
 
     --line-2:#26261f; --ink-4:#4a4a44; --axis-pointer:#6a6a60;
     --zoom-track:#3a3a34; --zoom-track-on:#5a5a52; --zoom-fill:#2e2e28;
+    --err-bg:#2b1a1a; --err-line:#5a2a2a; --err-ink:#f0c0c0;
+    color-scheme:dark;
+  }
+  :root[data-theme="light"]{
+    --bg:#f6f5f1; --surface:#ffffff; --surface-2:#efeee8; --line:#dddbd2;
+    --ink:#1b1b18; --ink-2:#45443e; --ink-3:#6f6e65;
+    --c-up:#d13c3c; --c-down:#0e8a5c;
+    --line-2:#eeede7; --ink-4:#b9b8ae; --axis-pointer:#8f8e84;
+    --zoom-track:#cfcdc4; --zoom-track-on:#a9a79d; --zoom-fill:#e6e4dc;
+    --err-bg:#fdeeee; --err-line:#f0c4c4; --err-ink:#8a2222;
+    color-scheme:light;
+    --c-foreign:#2468c4; --c-trust:#a86a00; --c-dealer:#8f8e84; --c-margin:#6a5bd6;
+    --c-holders:#45443e; --c-big:#a86a00;
+    --c-ma5:#1b1b18; --c-ma20:#a86a00; --c-ma60:#2468c4;
   }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
@@ -63,7 +83,7 @@
   .btn:disabled,.seg button:disabled{opacity:.35;cursor:default}
   .date-nav{display:inline-flex;align-items:center;gap:6px}
   .date-nav input{background:var(--surface);color:var(--ink);border:1px solid var(--line);
-    border-radius:7px;padding:5px 8px;font:inherit;font-size:13px;color-scheme:dark}
+    border-radius:7px;padding:5px 8px;font:inherit;font-size:13px}
   .chart-wrap{position:relative}
   .chart-float{position:absolute;z-index:2;background:var(--bg)}
   .seg-sm button{padding:2px 9px;font-size:12px}
@@ -105,7 +125,7 @@
 
   footer{color:var(--ink-3);font-size:12px;margin-top:26px;line-height:1.7}
   code{background:var(--surface-2);padding:1.5px 5px;border-radius:4px;font-size:12px}
-  .err{background:#2b1a1a;border:1px solid #5a2a2a;color:#f0c0c0;padding:18px 20px;
+  .err{background:var(--err-bg);border:1px solid var(--err-line);color:var(--err-ink);padding:18px 20px;
     border-radius:10px;line-height:1.7}
 
   @media (max-width: 720px){
@@ -157,6 +177,10 @@
           <button data-v="252">1Y</button>
           <button data-v="0">全部</button>
         </div>
+      </div>
+      <div>
+        <span class="ctrl-label">&nbsp;</span>
+        <button class="btn" id="btn-theme" aria-label="切換深淺色">淺色</button>
       </div>
     </div>
   </header>
@@ -230,7 +254,9 @@
 
   const CSS = getComputedStyle(document.documentElement);
   const C = k => CSS.getPropertyValue(k).trim();
-  const COLORS = {
+  // Refilled on a theme change; renderers read COLORS at draw time.
+  const COLORS = {};
+  function readColors(){ Object.assign(COLORS, {
     foreign:C('--c-foreign'), trust:C('--c-trust'), dealer:C('--c-dealer'),
     margin:C('--c-margin'), holders:C('--c-holders'), big:C('--c-big'),
     ma5:C('--c-ma5'), ma20:C('--c-ma20'), ma60:C('--c-ma60'),
@@ -238,7 +264,8 @@
     ink:C('--ink'), ink2:C('--ink-2'), ink3:C('--ink-3'), ink4:C('--ink-4'),
     line:C('--line'), line2:C('--line-2'), surface:C('--surface'), pointer:C('--axis-pointer'),
     zoomTrack:C('--zoom-track'), zoomTrackOn:C('--zoom-track-on'), zoomFill:C('--zoom-fill')
-  };
+  }); }
+  readColors();
   const alpha = (hex, a) => {
     const h = hex.replace('#','');
     const n = parseInt(h.length===3 ? h.split('').map(c=>c+c).join('') : h, 16);
@@ -676,6 +703,28 @@
   window.addEventListener('resize', ()=>{
     clearTimeout(resizeT);
     resizeT = setTimeout(()=>{ if(S){ chart.resize(); renderChart(); } }, 150);
+  });
+
+
+  // ── Theme ─────────────────────────────────────────────────
+  const themeBtn = document.getElementById('btn-theme');
+  const syncThemeBtn = () => {
+    const dark = document.documentElement.dataset.theme !== 'light';
+    themeBtn.textContent = dark ? '☀ 淺色' : '☾ 深色';
+    themeBtn.setAttribute('aria-pressed', dark ? 'false' : 'true');
+  };
+  syncThemeBtn();
+  themeBtn.addEventListener('click', ()=>{
+    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('atlas-theme', next); } catch(e) {}
+    syncThemeBtn();
+    readColors();
+    if(S){
+      const dz = (chart.getOption().dataZoom || [])[0];
+      renderKpis(); renderChart(); renderBrokers();
+      if(dz) chart.dispatchAction({type:'dataZoom', startValue:dz.startValue, endValue:dz.endValue});
+    }
   });
 
   const want = location.hash.slice(1);

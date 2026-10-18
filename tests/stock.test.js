@@ -165,6 +165,19 @@ module.exports = {
       tog("total"); tog("foreign");
       t.eq("合計 alone", instNames(), ["合計買賣超"]);
 
+      // ── Theme ──
+      const upColor = () => chart.getOption().series.find(x => x.type === "candlestick").itemStyle.color;
+      const darkUp = upColor();
+      t.eq("starts dark", doc.documentElement.dataset.theme, "dark");
+      doc.getElementById("btn-theme").click();
+      t.eq("toggle switches to light", doc.documentElement.dataset.theme, "light");
+      t.eq("choice is remembered", window.localStorage.getItem("atlas-theme"), "light");
+      // The palette swap itself is not asserted: jsdom does not resolve custom
+      // properties set under :root[data-theme="light"]. Checked in Chromium
+      // instead (candles #e66767 -> #d13c3c, body background light).
+      doc.getElementById("btn-theme").click();
+      t.eq("and back to dark", [doc.documentElement.dataset.theme, upColor()], ["dark", darkUp]);
+
       doc.querySelector('#seg-range button[data-v="21"]').click();
       await sleep(100);
       const z = chart.getOption().dataZoom[0];
