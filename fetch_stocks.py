@@ -60,6 +60,9 @@ DJ_SERIES_URL = DJ_BASE + "/Z/ZC/ZCO/CZCO.DJBCD?A={code}"
 # from the page's own <select name="D">: 2 = 5 days, 4 = 20, 6 = 60.
 DJ_BROKER_PERIODS = {"1": "", "5": "_2", "20": "_4", "60": "_6"}
 DJ_BROKER_URL = DJ_BASE + "/z/zc/zco/zco_{code}{suffix}.djhtm"
+# Custom range (e = from, f = to, unpadded Y-M-D): one session's broker table
+# for any past day. Past days never change, so these are cached for good.
+DJ_BROKER_DAY_URL = DJ_BASE + "/z/zc/zco/zco.djhtm?a={code}&e={d}&f={d}"
 
 LOTS = 1000  # shares per lot (張)
 
@@ -185,19 +188,24 @@ def fetch_stock_month(code, ym, rebuild_only=False):
 # Third-party pages (shareholders, main force)
 # --------------------------------------------------------------------------
 
-def fetch_page(source, key, url, encoding, rebuild_only=False):
+def fetch_page(source, key, url, encoding, rebuild_only=False, permanent=False):
     """
     GET a third-party page, cached for the day it was fetched on. These pages
     always show "latest", so there is no closed period to cache forever; one
     fetch per day per page is all a daily job needs. Returns text or None.
     A failed fetch falls back to the last copy on disk.
+
+    `permanent` marks a page about a closed period (a past session): any
+    cached copy is final. The caller drops a copy that turns out not to cover
+    the period asked for (see fetch_broker_day).
     """
     cp = fd._cache_path(source, key)
     cached = None
     if os.path.exists(cp):
         with open(cp, "r", encoding="utf-8") as f:
             cached = json.load(f)
-        if rebuild_only or cached.get("_fetchedOn") == date.today().isoformat():
+        if (rebuild_only or permanent
+                or cached.get("_fetchedOn") == date.today().isoformat()):
             fd._stats["cache_hits"] += 1
             return cached.get("body")
     if rebuild_only:
@@ -336,8 +344,40 @@ def parse_brokers(body):
     m = re.search(r"最後更新日：(\d{4}/\d{1,2}/\d{1,2})", body)
     if not buy and not sell:
         return None
+    # The page's own totals (合計買超張數 / 合計賣超張數); their difference is
+    # the day's main-force net, the same figure as the CZCO series.
+    text = _cell_text(body)
+    tot = {k: re.search(k + r"\s*([\d,]+)", text) for k in ("合計買超張數", "合計賣超張數")}
     return {"updated": fd.parse_twse_date(m.group(1)) if m else None,
-            "buy": buy, "sell": sell}
+            "buy": buy, "sell": sell,
+            "totalBuy": fd.parse_num(tot["合計買超張數"].group(1)) if tot["合計買超張數"] else None,
+            "totalSell": fd.parse_num(tot["合計賣超張數"].group(1)) if tot["合計賣超張數"] else None}
+
+
+def fetch_broker_day(code, d, rebuild_only=False):
+    """
+    One session's broker table, or None. DJ answers a day it has not published
+    yet with an empty table or another day's; neither is kept, so the next run
+    asks again.
+    """
+    y, m, dd = (int(x) for x in d.split("-"))
+    key = f"{code}_{d.replace('-', '')}"
+    b = parse_brokers(fetch_page("DJ_ZCO_DAY", key,
+                                 DJ_BROKER_DAY_URL.format(code=code, d=f"{y}-{m}-{dd}"),
+                                 "cp950", rebuild_only, permanent=True))
+    if b is None or b["updated"] != d:
+        cp = fd._cache_path("DJ_ZCO_DAY", key)
+        if os.path.exists(cp):
+            os.remove(cp)
+        return None
+    return b
+
+
+def compact_brokers(b):
+    """Per-day tables ride along for every session: rows as arrays, not objects."""
+    row = lambda x: [x["name"], x["buy"], x["sell"], x["net"], x["pct"]]  # noqa: E731
+    return {"buy": [row(x) for x in b["buy"]], "sell": [row(x) for x in b["sell"]],
+            "totalBuy": b.get("totalBuy"), "totalSell": b.get("totalSell")}
 
 
 # --------------------------------------------------------------------------
@@ -373,6 +413,19 @@ def build_stock(code, months, market, rebuild_only=False):
         fetch_page("DJ_CZCO", code, DJ_SERIES_URL.format(code=code), "cp950", rebuild_only),
         days))
 
+    # Per-day broker tables for every session in range. The first run walks
+    # the whole range (one request a day); after that only new days are asked.
+    broker_daily = {}
+    for i, d in enumerate(days, 1):
+        b = fetch_broker_day(code, d, rebuild_only)
+        if b is not None:
+            broker_daily[d] = compact_brokers(b)
+            # The CZCO series reaches back ~45 sessions; the tables fill the rest.
+            if main.get(d) is None and b["totalBuy"] is not None and b["totalSell"] is not None:
+                main[d] = b["totalBuy"] - b["totalSell"]
+        if i % 50 == 0:
+            print(f"    {code} broker tables {i}/{len(days)}", flush=True)
+
     daily = []
     for d in days:
         inst, mg = market.get(d, ({}, {}))
@@ -407,6 +460,7 @@ def build_stock(code, months, market, rebuild_only=False):
         "generatedAt": datetime.now().isoformat(timespec="seconds"),
         "start": days[0], "end": days[-1],
         "daily": daily, "holders": holders, "brokers": brokers,
+        "brokerDaily": broker_daily,
     }
 
 
@@ -483,7 +537,7 @@ def main():
         print(f"  {code} {s['name']}: {len(d)} days ({s['start']} -> {s['end']}) · "
               f"法人 {cov('foreign')} · 融資 {cov('marginBalance')} · "
               f"主力 {cov('mainForce')} · 股東週 {len(s['holders'])} · "
-              f"分點 {','.join(s['brokers']) or '-'}")
+              f"分點 {','.join(s['brokers']) or '-'} · 分點日 {len(s['brokerDaily'])}")
 
     entries = write_index(list(dict.fromkeys(read_watchlist() + codes)))
     st = fd._stats

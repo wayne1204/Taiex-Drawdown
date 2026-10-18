@@ -137,6 +137,13 @@ class TestBrokers(Base):
                                      "net": 1274, "pct": 3.51}])
         self.assertEqual(b["sell"][0]["name"], "美林")
 
+    def test_page_totals(self):
+        body = ("<div>最後更新日：2026/10/08</div><TR><TD><a>x</a></TD><TD>1</TD><TD>0</TD><TD>1</TD>"
+                "<TD>1%</TD><TD><a>y</a></TD><TD>0</TD><TD>1</TD><TD>1</TD><TD>1%</TD></TR>"
+                "<tr><td>合計買超張數</td><td>3,804</td><td>合計賣超張數</td><td>13,043</td></tr>")
+        b = fs.parse_brokers(body)
+        self.assertEqual((b["totalBuy"], b["totalSell"]), (3804, 13043))
+
     def test_empty_page(self):
         self.assertIsNone(fs.parse_brokers("<html>無資料</html>"))
 

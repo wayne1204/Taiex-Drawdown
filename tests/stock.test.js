@@ -47,6 +47,9 @@ function fixture() {
     brokers: { "1": { updated: daily[daily.length - 1].date, buy: side("B"), sell: side("S") },
                "5": { updated: daily[daily.length - 1].date, buy: side("B5"), sell: side("S5").slice(0, 3) } }
   };
+  // A past session's own broker table, as fetch_stocks.py stores it (arrays)
+  stock.brokerDaily = { [daily[60].date]: { buy: [["過去券商", 10, 1, 9, 0.1]], sell: [["賣方", 1, 5, 4, 0.1]],
+                                            totalBuy: 9, totalSell: 4 } };
   return { stock, list: [{ code: "9999", name: "測試股", end: stock.end }] };
 }
 
@@ -100,12 +103,13 @@ module.exports = {
       t.ok("no uncaught errors or console noise", errors.length === 0, errors.slice(0, 3).join(" || ") || "clean");
       t.ok("error banner hidden", doc.getElementById("error").hidden);
       t.eq("title names the stock", doc.getElementById("title").textContent, "9999 測試股");
-      t.eq("hash tracks the stock", window.location.hash, "#9999");
+      t.eq("a plain visit leaves the URL alone", window.location.hash, "");
+      t.eq("date box starts on the latest session", doc.getElementById("d-pick").value, fx.stock.end);
 
       const kpis = [...doc.querySelectorAll("#kpis .kpi")];
       t.eq("8 KPI cards", kpis.length, 8);
       const last = fx.stock.daily[fx.stock.daily.length - 1];
-      const kv = k => kpis.find(x => x.querySelector(".k").textContent.startsWith(k)).querySelector(".v").textContent;
+      const kv = k => [...doc.querySelectorAll("#kpis .kpi")].find(x => x.querySelector(".k").textContent.startsWith(k)).querySelector(".v").textContent;
       t.eq("foreign KPI is the last day's net", kv("外資"), (last.foreign > 0 ? "+" : "") + last.foreign.toLocaleString("en-US"));
       t.eq("margin KPI is the last balance", kv("融資餘額"), last.marginBalance.toLocaleString("en-US"));
 
@@ -126,6 +130,40 @@ module.exports = {
       t.eq("period toggle swaps tables", doc.querySelectorAll("#brokers .tbl:last-child tbody tr").length, 3);
       doc.querySelector('#seg-period button[data-v="60"]').click();
       t.ok("period without data says so", /沒有分點資料/.test(doc.getElementById("br-sum").textContent));
+
+      // ── Date box ──
+      const pickDate = v => { const el = doc.getElementById("d-pick"); el.value = v;
+        el.dispatchEvent(new window.Event("change")); };
+      const d60 = fx.stock.daily[60];
+      pickDate(d60.date);
+      t.ok("KPIs follow the picked date", kv("收盤").includes(d60.close.toLocaleString("en-US")) &&
+        kpis.length && doc.querySelector("#kpis .kpi .k").textContent.includes(d60.date.replace(/-/g, "/")),
+        doc.querySelector("#kpis .kpi .k").textContent);
+      doc.querySelector('#seg-period button[data-v="1"]').click();
+      t.ok("1-day brokers come from that day's own table",
+        doc.querySelector("#brokers tbody td").textContent === "過去券商");
+      t.ok("5/20/60 disabled on a past date",
+        doc.querySelector('#seg-period button[data-v="5"]').disabled);
+      const sat = new Date(Date.parse(d60.date) + 864e5 * ((6 - new Date(d60.date).getUTCDay() + 7) % 7 || 7));
+      pickDate(sat.toISOString().slice(0, 10));
+      t.ok("a non-trading day snaps to the session before it",
+        fx.stock.daily.some(r => r.date === doc.getElementById("d-pick").value) &&
+        doc.getElementById("d-pick").value <= sat.toISOString().slice(0, 10), doc.getElementById("d-pick").value);
+      doc.getElementById("d-latest").click();
+      t.eq("最新 returns to the last session", doc.getElementById("d-pick").value, fx.stock.end);
+      t.ok("5-day toggle enabled again", !doc.querySelector('#seg-period button[data-v="5"]').disabled);
+
+      // ── 法人 toggles ──
+      const instNames = () => chart.getOption().series.filter(x => x.xAxisIndex === 2 && x.data && x.data.length)
+        .map(x => x.name);
+      const tog = k => doc.querySelector(`#seg-inst button[data-v="${k}"]`).click();
+      t.eq("all four on by default", instNames(), ["外資", "投信", "自營商", "三大法人合計"]);
+      tog("trust"); tog("dealer"); tog("total");
+      t.eq("only 外資 left: one red/green bar series", instNames(), ["外資買賣超"]);
+      tog("foreign");
+      t.eq("the last one cannot be switched off", instNames(), ["外資買賣超"]);
+      tog("total"); tog("foreign");
+      t.eq("合計 alone", instNames(), ["合計買賣超"]);
 
       doc.querySelector('#seg-range button[data-v="21"]').click();
       await sleep(100);

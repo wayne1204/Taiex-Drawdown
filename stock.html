@@ -57,6 +57,16 @@
     font-variant-numeric:tabular-nums;font-family:inherit;transition:background .12s,color .12s}
   .seg button:hover{color:var(--ink)}
   .seg button[aria-pressed="true"]{background:var(--surface-2);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
+  .btn{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
+    padding:5px 10px;border-radius:7px;font-size:13px;cursor:pointer;font-family:inherit;line-height:1.3}
+  .btn:hover:not(:disabled){color:var(--ink);border-color:var(--ink-4)}
+  .btn:disabled,.seg button:disabled{opacity:.35;cursor:default}
+  .date-nav{display:inline-flex;align-items:center;gap:6px}
+  .date-nav input{background:var(--surface);color:var(--ink);border:1px solid var(--line);
+    border-radius:7px;padding:5px 8px;font:inherit;font-size:13px;color-scheme:dark}
+  .chart-wrap{position:relative}
+  .chart-float{position:absolute;z-index:2;background:var(--bg)}
+  .seg-sm button{padding:2px 9px;font-size:12px}
   select{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:7px;
     padding:6px 10px;font:inherit;font-size:13px;min-width:12em}
 
@@ -130,6 +140,15 @@
         <select id="pick"></select>
       </div>
       <div>
+        <label class="ctrl-label" for="d-pick">日期</label>
+        <div class="date-nav">
+          <button class="btn" id="d-prev" aria-label="前一交易日">‹</button>
+          <input type="date" id="d-pick" aria-label="檢視日期">
+          <button class="btn" id="d-next" aria-label="後一交易日">›</button>
+          <button class="btn" id="d-latest">最新</button>
+        </div>
+      </div>
+      <div>
         <span class="ctrl-label">區間</span>
         <div class="seg" id="seg-range" role="group" aria-label="圖表區間">
           <button data-v="21">1M</button>
@@ -148,9 +167,19 @@
     <div class="panel">
       <div class="panel-head">
         <h2>日 K 與籌碼</h2>
-        <span class="hint">單位：張 · 股東與大戶為每週集保資料，標在該週最後交易日</span>
+        <span class="hint">單位：張 · 股東與大戶為每週集保資料 · 點圖表可切換日期</span>
       </div>
-      <div id="chart"></div>
+      <!-- Each 法人 button toggles its own series; positioned by renderChart()
+           on the flow panel's title row. -->
+      <div class="chart-wrap">
+        <div id="chart"></div>
+        <div class="seg seg-sm chart-float" id="seg-inst" role="group" aria-label="法人買賣超顯示">
+          <button data-v="foreign" aria-pressed="true">外資</button>
+          <button data-v="trust" aria-pressed="true">投信</button>
+          <button data-v="dealer" aria-pressed="true">自營商</button>
+          <button data-v="total" aria-pressed="true">合計</button>
+        </div>
+      </div>
       <div class="legend">
         <span><i class="dot" style="background:linear-gradient(135deg,var(--c-up) 50%,var(--c-down) 50%)"></i>K 線 / 量</span>
         <span><i class="dot" style="background:var(--c-ma5)"></i>MA5</span>
@@ -183,7 +212,7 @@
 
     <footer>
       <p><strong>主力買賣超</strong> = 當期買超前 15 名券商分點合計 − 賣超前 15 名合計（富邦 e-Broker 定義）；
-      日序列只回溯約 45 個交易日，之後每次更新逐日累積。<strong>大戶</strong> = 集保持股 &gt; 400 張者，
+      日序列以每日分點表回補整段期間。選擇過去日期時，近 1 日分點顯示當天資料，近 5/20/60 日統計只提供最新交易日。<strong>大戶</strong> = 集保持股 &gt; 400 張者，
       提示框另列 &gt; 1000 張。</p>
       <p>資料來源：臺灣證券交易所（個股日成交、三大法人買賣超 T86、融資融券彙總）、
       神秘金字塔 norway.twsthr.info（集保股權分散）、富邦 e-Broker（主力進出）。
@@ -242,7 +271,13 @@
 
   // ── State ─────────────────────────────────────────────────
   let S = null;                 // the stock in view
+  let sel = 0;                  // index of the session being viewed
   let range = 126, period = '1';
+  // Which 法人 series the flow panel draws. Independent toggles; at least one
+  // stays on.
+  const instOn = {foreign:true, trust:true, dealer:true, total:true};
+  const INST = {foreign:'外資', trust:'投信', dealer:'自營商', total:'合計'};
+  const DEFAULT_CODE = '2330';
 
   const pick = document.getElementById('pick');
   pick.innerHTML = LIST.map(s=>`<option value="${s.code}">${s.code} ${s.name||''}</option>`).join('');
@@ -287,14 +322,15 @@
 
   // ── KPI cards ─────────────────────────────────────────────
   function renderKpis(){
-    const R = S.rows, n = R.length, last = R[n-1], prev = R[n-2] || {};
+    // Everything on the cards is "as of" the selected session.
+    const R = S.rows.slice(0, sel+1), n = R.length, last = R[n-1], prev = R[n-2] || {};
     const lastN = (k, d) => sumOf(R.slice(-d).map(r=>r[k]));
     const chg = has(last.close) && has(prev.close) ? last.close - prev.close : null;
     const pct = has(chg) && prev.close ? chg/prev.close*100 : null;
-    const H = (S.stock.holders||[]), h1 = H[H.length-1], h0 = H[H.length-2];
+    const H = (S.stock.holders||[]).filter(h => h.date <= last.date), h1 = H[H.length-1], h0 = H[H.length-2];
     const hd = (k) => h1 && h0 && has(h1[k]) && has(h0[k]) ? h1[k]-h0[k] : null;
     // Main force runs a day behind the TWSE data on some evenings; quote the
-    // latest day it actually has rather than a blank.
+    // latest day it actually has (up to the selected one) rather than a blank.
     const mfRow = [...R].reverse().find(r=>has(r.mainForce));
     const mfIdx = mfRow ? R.indexOf(mfRow) : -1;
     const mf5 = mfIdx >= 0 ? sumOf(R.slice(Math.max(0,mfIdx-4), mfIdx+1).map(r=>r.mainForce)) : null;
@@ -342,9 +378,13 @@
     return { grids, narrow, left: narrow ? 46 : 70, right: narrow ? 12 : 26, totalH: top + foot };
   }
 
+  // The window ends at the selected session, with a little room after it
+  // when there is any, so the day in focus is never pinned to the edge.
   const zoomOpt = () => {
     const n = S.dates.length;
-    return range && range < n ? {startValue:n-range, endValue:n-1} : {start:0, end:100};
+    if(!range || range >= n) return {start:0, end:100};
+    const end = Math.min(n-1, sel + Math.round(range/6));
+    return {startValue:Math.max(0, end-range+1), endValue:end};
   };
 
   function tooltipFormatter(params){
@@ -389,6 +429,38 @@
     lineStyle:{width:extra.width||2, color}, itemStyle:{color}, ...extra
   });
 
+  // A dashed vertical rule on every panel at the selected session. Hung on
+  // empty line series with fixed ids, so a date change can move it without
+  // rebuilding the chart (and losing the user's zoom).
+  const selMarks = () => NAMES.map((_,i)=>({
+    id:'sel'+i, type:'line', data:[], silent:true, xAxisIndex:i, yAxisIndex:i,
+    markLine:{silent:true, symbol:'none', animation:false, label:{show:false},
+      lineStyle:{color:COLORS.ink3, width:1, type:'dashed'}, data:[{xAxis:S.dates[sel]}]}
+  }));
+
+  // 法人 panel: one item on → red/green bars by sign, like every other flow
+  // panel. Several → the desks stack in their own hues (buys above zero, sells
+  // below) and 合計 is a line over them. 合計 is always all three desks.
+  function instSeries(){
+    const R = S.rows;
+    const on = Object.keys(INST).filter(k=>instOn[k]);
+    const val = k => k==='total' ? S.instTotal.map(gap) : R.map(r=>gap(r[k]));
+    if(on.length === 1) return [signBars(INST[on[0]]+'買賣超', val(on[0]), P.INST)];
+    return [
+      ...on.filter(k=>k!=='total').map(k=>({
+        name:INST[k], type:'bar', stack:'inst', data:val(k), barMaxWidth:8,
+        xAxisIndex:P.INST, yAxisIndex:P.INST, itemStyle:{color:COLORS[k]} })),
+      ...(instOn.total ? [line('三大法人合計', val('total'), P.INST, COLORS.ink, {
+        lineStyle:{width:1, color:COLORS.ink, opacity:.7}})] : []),
+      { type:'line', data:[], silent:true, xAxisIndex:P.INST, yAxisIndex:P.INST,
+        markLine:{silent:true, symbol:'none', data:[{yAxis:0}], lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}} }
+    ];
+  }
+  const instTitle = () => {
+    const on = Object.keys(INST).filter(k=>instOn[k]);
+    return on.length === 1 ? `${on[0]==='total' ? '三大法人合計' : INST[on[0]]}買賣超（張）` : NAMES[P.INST];
+  };
+
   function renderChart(){
     const L = layout();
     const el = document.getElementById('chart');
@@ -400,7 +472,7 @@
     chart.setOption({
       backgroundColor:'transparent', animation:false,
       textStyle:{fontFamily:'Inter, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif'},
-      title: L.grids.map(g=>({text:g.name, left:L.narrow?8:L.left+4, top:g.top-(L.narrow?19:17),
+      title: L.grids.map((g,i)=>({text: i===P.INST ? instTitle() : g.name, left:L.narrow?8:L.left+4, top:g.top-(L.narrow?19:17),
         textStyle:{color:COLORS.ink3, fontSize:L.narrow?10:11.5, fontWeight:500}})),
       grid: L.grids.map(g=>({left:L.left, right:L.right, top:g.top, height:g.height})),
       xAxis: all.map(i=>({
@@ -449,14 +521,7 @@
           data: R.map((r,i)=>({value:gap(r.volume),
             itemStyle:{color: has(r.close) && has(r.open) && r.close < r.open ? COLORS.down : COLORS.up}})) },
 
-        // Same-sign stacking (ECharts' default): buys pile up above zero and
-        // sells below, so a split day shows both desks rather than netting out.
-        ...[['外資','foreign'],['投信','trust'],['自營商','dealer']].map(([n,k])=>({
-          name:n, type:'bar', stack:'inst', data:R.map(r=>gap(r[k])), barMaxWidth:8,
-          xAxisIndex:P.INST, yAxisIndex:P.INST, itemStyle:{color:COLORS[k]} })),
-        line('三大法人合計', S.instTotal.map(gap), P.INST, COLORS.ink, {width:1, showSymbol:false,
-          lineStyle:{width:1, color:COLORS.ink, opacity:.7},
-          markLine:{silent:true, symbol:'none', data:[{yAxis:0}], lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}}}),
+        ...instSeries(),
 
         signBars('主力買賣超', R.map(r=>gap(r.mainForce)), P.MAIN),
         signBars('融資增減', R.map(r=>gap(r.marginChange)), P.MCHG),
@@ -464,17 +529,40 @@
           {areaStyle:{color:alpha(COLORS.margin,.10)}}),
         // Weekly points on a daily axis: connect across the days in between.
         line('股東人數', weekly('holders'), P.HOLD, COLORS.holders, {connectNulls:true, showSymbol:true, symbolSize:4}),
-        line('大戶人數', weekly('big400'), P.BIG, COLORS.big, {connectNulls:true, showSymbol:true, symbolSize:4})
+        line('大戶人數', weekly('big400'), P.BIG, COLORS.big, {connectNulls:true, showSymbol:true, symbolSize:4}),
+        ...selMarks()
       ]
     }, {notMerge:true});
+
+    const instSeg = document.getElementById('seg-inst');
+    instSeg.style.top   = (L.grids[P.INST].top - 30) + 'px';
+    instSeg.style.right = L.right + 'px';
   }
 
   // ── Broker tables ─────────────────────────────────────────
+  // The 5/20/60-day windows exist only as of the latest session (the source
+  // publishes them that way); an earlier date gets that day's own table.
+  const isLatest = () => sel === S.rows.length - 1;
+  function brokersFor(){
+    if(period !== '1') return isLatest() ? (S.stock.brokers || {})[period] : null;
+    const d = S.dates[sel];
+    const latest = (S.stock.brokers || {})['1'];
+    if(latest && latest.updated === d) return latest;
+    const c = (S.stock.brokerDaily || {})[d];
+    if(!c) return null;
+    const obj = x => ({name:x[0], buy:x[1], sell:x[2], net:x[3], pct:x[4]});
+    return {updated:d, buy:c.buy.map(obj), sell:c.sell.map(obj)};
+  }
   function renderBrokers(){
-    const b = (S.stock.brokers || {})[period];
+    document.querySelectorAll('#seg-period button').forEach(b=>{
+      b.disabled = b.dataset.v !== '1' && !isLatest();
+    });
+    const b = brokersFor();
     const box = document.getElementById('brokers'), sum = document.getElementById('br-sum');
     if(!b){
-      sum.innerHTML = '<span class="muted">此期間沒有分點資料</span>';
+      sum.innerHTML = period !== '1' && !isLatest()
+        ? `<span class="muted">近 ${period} 日統計只提供最新交易日；${fd(S.dates[sel])} 請看近 1 日</span>`
+        : `<span class="muted">${fd(S.dates[sel])} 沒有分點資料</span>`;
       box.innerHTML = '';
       return;
     }
@@ -506,7 +594,8 @@
       document.title = `${stock.code} ${stock.name} · 個股籌碼監控`;
       document.getElementById('meta').textContent =
         `${fd(stock.start)} – ${fd(stock.end)} · ${S.rows.length} 個交易日 · 更新於 ${stock.generatedAt.replace('T',' ')}`;
-      if(location.hash.slice(1) !== code) history.replaceState(null, '', '#'+code);
+      sel = S.rows.length - 1;
+      syncDate();
       renderKpis(); renderChart(); renderBrokers();
     }).catch(()=>{
       showError(`<strong>${code} 的資料載入失敗。</strong><br>請執行 <code>python3 fetch_stocks.py</code>，` +
@@ -524,7 +613,61 @@
   }
   seg('seg-range', v=>{ range = +v; if(S) chart.dispatchAction({type:'dataZoom', ...zoomOpt()}); });
   seg('seg-period', v=>{ period = v; if(S) renderBrokers(); });
-  pick.addEventListener('change', ()=>show(pick.value));
+  // Only an explicit pick goes into the URL, so a plain visit always opens on
+  // the default stock rather than whichever one was last looked at.
+  pick.addEventListener('change', ()=>{ history.replaceState(null, '', '#'+pick.value); show(pick.value); });
+
+  // ── Date ──────────────────────────────────────────────────
+  const dPick = document.getElementById('d-pick');
+  function syncDate(){
+    dPick.min = S.dates[0]; dPick.max = S.dates[S.dates.length-1];
+    dPick.value = S.dates[sel];
+    document.getElementById('d-prev').disabled = sel === 0;
+    document.getElementById('d-next').disabled = isLatest();
+    document.getElementById('d-latest').disabled = isLatest();
+  }
+  // rezoom: move the chart window to the day (date box, buttons). A click on
+  // the chart itself keeps the user's window and only moves the marker.
+  function setSel(i, rezoom){
+    if(!S) return;
+    sel = Math.max(0, Math.min(S.rows.length-1, i));
+    syncDate(); renderKpis(); renderBrokers();
+    if(rezoom) chart.dispatchAction({type:'dataZoom', ...zoomOpt()});
+    chart.setOption({series: selMarks()});
+  }
+  dPick.addEventListener('change', ()=>{
+    const v = dPick.value;
+    if(!v) return syncDate();
+    // A non-trading day snaps back to the session on or before it.
+    let i = S.dates.length - 1;
+    while(i > 0 && S.dates[i] > v) i--;
+    setSel(i, true);
+  });
+  document.getElementById('d-prev').addEventListener('click', ()=>setSel(sel-1, true));
+  document.getElementById('d-next').addEventListener('click', ()=>setSel(sel+1, true));
+  document.getElementById('d-latest').addEventListener('click', ()=>setSel(S.rows.length-1, true));
+  chart.getZr().on('click', e=>{
+    if(!S) return;
+    const pt = [e.offsetX, e.offsetY];
+    if(!NAMES.some((_,i)=>chart.containPixel({gridIndex:i}, pt))) return;
+    const i = chart.convertFromPixel({xAxisIndex:0}, pt)[0];
+    if(Number.isFinite(i)) setSel(Math.round(i), false);
+  });
+
+  // ── 法人 toggles ──────────────────────────────────────────
+  document.getElementById('seg-inst').addEventListener('click', e=>{
+    const b = e.target.closest('button'); if(!b) return;
+    const k = b.dataset.v;
+    if(instOn[k] && Object.values(instOn).filter(Boolean).length === 1) return;  // keep one on
+    instOn[k] = !instOn[k];
+    b.setAttribute('aria-pressed', instOn[k] ? 'true' : 'false');
+    if(S){
+      // Rebuild, but keep the window the user is looking at.
+      const dz = (chart.getOption().dataZoom || [])[0];
+      renderChart();
+      if(dz) chart.dispatchAction({type:'dataZoom', startValue:dz.startValue, endValue:dz.endValue});
+    }
+  });
   window.addEventListener('hashchange', ()=>{
     const c = location.hash.slice(1);
     if(c && (!S || c !== S.stock.code) && LIST.some(s=>s.code===c)) show(c);
@@ -536,7 +679,8 @@
   });
 
   const want = location.hash.slice(1);
-  show(LIST.some(s=>s.code===want) ? want : LIST[0].code);
+  const has_ = c => LIST.some(s=>s.code===c);
+  show(has_(want) ? want : has_(DEFAULT_CODE) ? DEFAULT_CODE : LIST[0].code);
 })();
 </script>
 </body>
