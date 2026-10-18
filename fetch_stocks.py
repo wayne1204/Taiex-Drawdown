@@ -2,36 +2,38 @@
 """
 Single-stock monitor - data fetcher
 
-Builds one daily series per stock on the watchlist (stocks.txt) from five
-public sources:
+Builds a daily series for EVERY TWSE-listed stock and ETF (about 1,300), plus
+richer broker data for the stocks on the watchlist (stocks.txt):
 
-  1. Daily OHLC + volume       TWSE STOCK_DAY           (per stock, monthly query)
+  Every stock
+  1. Daily OHLC + volume       TWSE MI_INDEX            (whole market, single day)
   2. Institutional net         TWSE T86                 (whole market, single day)
   3. Margin balance / change   TWSE MI_MARGN ALL        (whole market, single day)
   4. Shareholder distribution  norway.twsthr.info       (per stock, weekly history)
-  5. Main-force net + brokers  fubon-ebrokerdj (DJ)     (per stock, ~45 sessions)
 
-The two whole-market daily queries are shared by every stock on the list, and
-are cached slimmed down to the few columns read back (see slim_t86 / slim_margin)
-so a year of them stays a few MB. Adding a stock to the watchlist therefore
-costs only its own K-bar months plus two page loads.
+  Watchlist stocks only (one request per stock per session - too many for all)
+  5. Main-force net + brokers  fubon-ebrokerdj (DJ)     (series, daily tables, windows)
 
-The main-force series from DJ only reaches back ~45 sessions. Every run folds
-it into the previous output, so history accumulates from the first run onward.
+The three whole-market queries cost three requests a day however many stocks
+are built; they are cached slimmed down to the columns read back. The trading
+calendar comes from the TAIEX months fetch_data.py already caches. Shareholder
+pages are refreshed once a week (TDCC publishes weekly), so a normal nightly
+run is three TWSE requests plus the watchlist's broker pages; the first run
+after each Saturday also walks every stock's shareholder page (~45 min).
 
 Outputs:
-  data/stocks/<code>.json   one stock
-  data/stocks/<code>.js     same, as window.STOCK_DATA[code] (works over file://)
-  data/stocks/index.js      window.STOCK_LIST, the watchlist the page offers
+  data/stocks/<code>.js     one stock, as window.STOCK_DATA[code] (works over file://)
+  data/stocks/index.js      window.STOCK_LIST: every built stock, watchlist first
 
 Usage:
-  python3 fetch_stocks.py                     # every stock in stocks.txt
-  python3 fetch_stocks.py --stocks 2327,2330  # just these
+  python3 fetch_stocks.py                     # whole market + watchlist extras
+  python3 fetch_stocks.py --watchlist-only    # just stocks.txt (fast)
+  python3 fetch_stocks.py --stocks 2327,2330  # just these, with broker data
   python3 fetch_stocks.py --months 24         # deeper history (default 12)
   python3 fetch_stocks.py --rebuild           # no requests; cache only
 
-Only TWSE-listed stocks are supported: TPEx (OTC) stocks are not in STOCK_DAY,
-T86 or MI_MARGN, and the run refuses them rather than emit a half-empty series.
+Only TWSE-listed securities are covered: TPEx (OTC) stocks are not in MI_INDEX,
+T86 or MI_MARGN.
 
 Note: Chinese string literals below are matched against response payloads
 (column headers, page labels). They are data and must not be translated.
@@ -44,7 +46,7 @@ import os
 import re
 import sys
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import fetch_data as fd
 
@@ -65,6 +67,11 @@ DJ_BROKER_URL = DJ_BASE + "/z/zc/zco/zco_{code}{suffix}.djhtm"
 DJ_BROKER_DAY_URL = DJ_BASE + "/z/zc/zco/zco.djhtm?a={code}&e={d}&f={d}"
 
 LOTS = 1000  # shares per lot (張)
+
+# Ordinary stocks (4 digits) and ETFs (00xx, 00xxx, 00xxxR ...). Excludes
+# preferred shares (2881A), TDRs (91xxxx), ETNs (020xxx) and REIT certificates
+# (01xxxT), which have no shareholder or institutional coverage worth a page.
+UNIVERSE_RE = re.compile(r"\d{4}|00\d{2,4}[A-Z]?")
 
 
 # --------------------------------------------------------------------------
@@ -154,41 +161,44 @@ def fetch_margin_all_day(ymd, rebuild_only=False):
     return (p or {}).get("rows") or {}
 
 
-def parse_stock_day(payload):
-    """STOCK_DAY -> (name, {date: {open, high, low, close, volume}}); volume in lots."""
-    out = {}
-    for row in fd.rows_of(payload):
-        if len(row) < 7:
+def slim_quotes(payload):
+    """
+    MI_INDEX (type=ALLBUT0999) -> {"rows": {code: [open, high, low, close, lots]},
+    "names": {code: name}}. The quote table is found by its header, among the
+    index and statistics tables that share the payload.
+    """
+    rows, names = {}, {}
+    for t in payload.get("tables") or []:
+        fields = [str(f) for f in t.get("fields") or []]
+        if "證券代號" not in fields or "收盤價" not in fields:
             continue
-        d = fd.parse_twse_date(row[0])
-        if not d:
-            continue
-        shares = fd.parse_num(row[1])
-        out[d] = {
-            "open": fd.parse_num(row[3]), "high": fd.parse_num(row[4]),
-            "low": fd.parse_num(row[5]), "close": fd.parse_num(row[6]),
-            "volume": round(shares / LOTS) if shares is not None else None,
-        }
-    # Title: "115年10月 2327 國巨*            各日成交資訊"
-    name = None
-    m = re.search(r"\d+年\d+月\s+\S+\s+(.+?)\s+各日成交資訊", (payload or {}).get("title", ""))
-    if m:
-        name = m.group(1).strip()
-    return name, out
+        ix = {k: fields.index(k) for k in ("證券代號", "證券名稱", "成交股數",
+                                            "開盤價", "最高價", "最低價", "收盤價")
+              if k in fields}
+        for r in t.get("data") or []:
+            code = str(r[ix["證券代號"]]).strip()
+            num = lambda k: fd.parse_num(r[ix[k]]) if k in ix else None  # noqa: E731
+            shares = num("成交股數")
+            rows[code] = [num("開盤價"), num("最高價"), num("最低價"), num("收盤價"),
+                          round(shares / LOTS) if shares is not None else None]
+            if "證券名稱" in ix:
+                names[code] = str(r[ix["證券名稱"]]).strip()
+    return {"stat": "OK", "rows": rows, "names": names}
 
 
-def fetch_stock_month(code, ym, rebuild_only=False):
-    p = fd.fetch(f"STOCK_DAY/{code}", "afterTrading/STOCK_DAY",
-                 {"date": f"{ym}01", "stockNo": code, "response": "json"},
-                 ym, rebuild_only)
-    return parse_stock_day(p)
+def fetch_quotes_day(ymd, rebuild_only=False):
+    p = fd.fetch("MI_INDEX", "afterTrading/MI_INDEX",
+                 {"date": ymd, "type": "ALLBUT0999", "response": "json"},
+                 ymd, rebuild_only, slim=slim_quotes)
+    return (p or {}).get("rows") or {}, (p or {}).get("names") or {}
 
 
 # --------------------------------------------------------------------------
 # Third-party pages (shareholders, main force)
 # --------------------------------------------------------------------------
 
-def fetch_page(source, key, url, encoding, rebuild_only=False, permanent=False):
+def fetch_page(source, key, url, encoding, rebuild_only=False, permanent=False,
+               fresh_since=None):
     """
     GET a third-party page, cached for the day it was fetched on. These pages
     always show "latest", so there is no closed period to cache forever; one
@@ -197,7 +207,8 @@ def fetch_page(source, key, url, encoding, rebuild_only=False, permanent=False):
 
     `permanent` marks a page about a closed period (a past session): any
     cached copy is final. The caller drops a copy that turns out not to cover
-    the period asked for (see fetch_broker_day).
+    the period asked for (see fetch_broker_day). `fresh_since` (ISO date)
+    accepts any copy fetched on or after it, for pages that change weekly.
     """
     cp = fd._cache_path(source, key)
     cached = None
@@ -205,7 +216,7 @@ def fetch_page(source, key, url, encoding, rebuild_only=False, permanent=False):
         with open(cp, "r", encoding="utf-8") as f:
             cached = json.load(f)
         if (rebuild_only or permanent
-                or cached.get("_fetchedOn") == date.today().isoformat()):
+                or (cached.get("_fetchedOn") or "") >= (fresh_since or date.today().isoformat())):
             fd._stats["cache_hits"] += 1
             return cached.get("body")
     if rebuild_only:
@@ -384,56 +395,73 @@ def compact_brokers(b):
 # Build one stock
 # --------------------------------------------------------------------------
 
+JS_PREFIX = re.compile(r'^\(window\.STOCK_DATA=window\.STOCK_DATA\|\|\{\}\)\["[^"]*"\]=')
+
+
 def load_previous(code):
-    path = os.path.join(OUT_DIR, f"{code}.json")
+    """The last output for `code` (its .js file), or {}."""
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            prev = json.load(f)
+        with open(os.path.join(OUT_DIR, f"{code}.js"), "r", encoding="utf-8") as f:
+            text = f.read().strip()
+        prev = json.loads(JS_PREFIX.sub("", text).rstrip(";"))
         return prev if isinstance(prev, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return {}
 
 
-def build_stock(code, months, market, rebuild_only=False):
-    """market: {date: (t86_rows, margin_rows)} shared across stocks."""
-    name, kbars = None, {}
-    for ym in months:
-        n, rows = fetch_stock_month(code, ym, rebuild_only)
-        name = n or name
-        kbars.update(rows)
-    if not kbars:
-        raise SystemExit(f"ERROR: no STOCK_DAY data for {code}. Is it TWSE-listed? "
-                         "TPEx (OTC) stocks are not supported.")
-    days = sorted(kbars)
+def holders_fresh_since(today=None):
+    """TDCC data is weekly; a shareholder page fetched since the last Saturday is current."""
+    today = today or date.today()
+    return (today - timedelta(days=(today.weekday() - 5) % 7)).isoformat()
 
+
+def build_stock(code, name, days, market, tracked, rebuild_only=False):
+    """
+    market: {date: (quotes, t86_rows, margin_rows)} shared across stocks.
+    `tracked` adds the per-stock broker data (main force, broker tables).
+    Returns None for a code with no quotes in range.
+    """
+    days = [d for d in days if code in market[d][0]]
+    if not days:
+        return None
     prev = load_previous(code)
-    main = {r["date"]: r.get("mainForce") for r in prev.get("daily") or []
-            if r.get("mainForce") is not None}
-    main.update(parse_main_series(
-        fetch_page("DJ_CZCO", code, DJ_SERIES_URL.format(code=code), "cp950", rebuild_only),
-        days))
+    lots = lambda v: round(v / LOTS) if v is not None else None  # noqa: E731
 
-    # Per-day broker tables for every session in range. The first run walks
-    # the whole range (one request a day); after that only new days are asked.
-    broker_daily = {}
-    for i, d in enumerate(days, 1):
-        b = fetch_broker_day(code, d, rebuild_only)
-        if b is not None:
-            broker_daily[d] = compact_brokers(b)
-            # The CZCO series reaches back ~45 sessions; the tables fill the rest.
-            if main.get(d) is None and b["totalBuy"] is not None and b["totalSell"] is not None:
-                main[d] = b["totalBuy"] - b["totalSell"]
-        if i % 50 == 0:
-            print(f"    {code} broker tables {i}/{len(days)}", flush=True)
+    main, broker_daily, brokers = {}, {}, {}
+    if tracked:
+        main = {r["date"]: r.get("mainForce") for r in prev.get("daily") or []
+                if r.get("mainForce") is not None}
+        main.update(parse_main_series(
+            fetch_page("DJ_CZCO", code, DJ_SERIES_URL.format(code=code), "cp950", rebuild_only),
+            days))
+        # Per-day broker tables for every session in range. The first run walks
+        # the whole range (one request a day); after that only new days are asked.
+        for i, d in enumerate(days, 1):
+            b = fetch_broker_day(code, d, rebuild_only)
+            if b is not None:
+                broker_daily[d] = compact_brokers(b)
+                # The CZCO series reaches back ~45 sessions; the tables fill the rest.
+                if main.get(d) is None and b["totalBuy"] is not None and b["totalSell"] is not None:
+                    main[d] = b["totalBuy"] - b["totalSell"]
+            if i % 50 == 0:
+                print(f"    {code} broker tables {i}/{len(days)}", flush=True)
+        for label, suffix in DJ_BROKER_PERIODS.items():
+            b = parse_brokers(fetch_page("DJ_ZCO", f"{code}{suffix or '_1'}",
+                                         DJ_BROKER_URL.format(code=code, suffix=suffix),
+                                         "cp950", rebuild_only))
+            if b is None:
+                b = (prev.get("brokers") or {}).get(label)
+            if b is not None:
+                brokers[label] = b
 
     daily = []
     for d in days:
-        inst, mg = market.get(d, ({}, {}))
+        quotes, inst, mg = market[d]
+        o, h, lo, c, vol = quotes[code]
         f, t, dl = inst.get(code) or [None, None, None]
         prev_bal, bal = mg.get(code) or [None, None]
-        lots = lambda v: round(v / LOTS) if v is not None else None  # noqa: E731
         daily.append({
-            "date": d, **kbars[d],
+            "date": d, "open": o, "high": h, "low": lo, "close": c, "volume": vol,
             "foreign": lots(f), "trust": lots(t), "dealer": lots(dl),
             "marginBalance": bal,
             "marginChange": bal - prev_bal if bal is not None and prev_bal is not None else None,
@@ -441,22 +469,13 @@ def build_stock(code, months, market, rebuild_only=False):
         })
 
     holders = parse_holders(
-        fetch_page("TWSTHR", code, HOLDERS_URL.format(code=code), "utf-8", rebuild_only))
+        fetch_page("TWSTHR", code, HOLDERS_URL.format(code=code), "utf-8", rebuild_only,
+                   fresh_since=holders_fresh_since()))
     if not holders:
         holders = prev.get("holders") or []
 
-    brokers = {}
-    for label, suffix in DJ_BROKER_PERIODS.items():
-        b = parse_brokers(fetch_page("DJ_ZCO", f"{code}{suffix or '_1'}",
-                                     DJ_BROKER_URL.format(code=code, suffix=suffix),
-                                     "cp950", rebuild_only))
-        if b is None:
-            b = (prev.get("brokers") or {}).get(label)
-        if b is not None:
-            brokers[label] = b
-
     return {
-        "code": code, "name": name or prev.get("name") or code,
+        "code": code, "name": name or prev.get("name") or code, "tracked": tracked,
         "generatedAt": datetime.now().isoformat(timespec="seconds"),
         "start": days[0], "end": days[-1],
         "daily": daily, "holders": holders, "brokers": brokers,
@@ -466,41 +485,48 @@ def build_stock(code, months, market, rebuild_only=False):
 
 def write_stock(s):
     os.makedirs(OUT_DIR, exist_ok=True)
-    with open(os.path.join(OUT_DIR, f"{s['code']}.json"), "w", encoding="utf-8") as f:
-        json.dump(s, f, ensure_ascii=False, separators=(",", ":"))
     with open(os.path.join(OUT_DIR, f"{s['code']}.js"), "w", encoding="utf-8") as f:
         f.write("(window.STOCK_DATA=window.STOCK_DATA||{})[" + json.dumps(s["code"]) + "]="
                 + json.dumps(s, ensure_ascii=False, separators=(",", ":")) + ";\n")
 
 
-def write_index(codes):
-    """The page's stock picker: every built stock on the watchlist, in list order."""
+def write_index(watchlist):
+    """
+    The page's stock picker: every stock with an output file, watchlist first
+    (in list order, the first being the page's default), then by code.
+    """
+    built = sorted(f[:-3] for f in os.listdir(OUT_DIR)
+                   if f.endswith(".js") and f != "index.js")
+    order = [c for c in watchlist if c in built] + [c for c in built if c not in watchlist]
     entries = []
-    for code in codes:
+    for code in order:
         s = load_previous(code)
         if s:
-            entries.append({"code": code, "name": s.get("name"), "end": s.get("end")})
+            entries.append({"code": code, "name": s.get("name"), "end": s.get("end"),
+                            "tracked": code in watchlist})
     with open(os.path.join(OUT_DIR, "index.js"), "w", encoding="utf-8") as f:
-        f.write("window.STOCK_LIST=" + json.dumps(entries, ensure_ascii=False) + ";\n")
+        f.write("window.STOCK_LIST=" + json.dumps(entries, ensure_ascii=False,
+                                                  separators=(",", ":")) + ";\n")
     return entries
 
 
 def main():
     ap = argparse.ArgumentParser(description="Fetch single-stock data for stock.html")
-    ap.add_argument("--stocks", help="comma-separated codes (default: stocks.txt)")
+    ap.add_argument("--stocks", help="comma-separated codes to build (with broker data)")
+    ap.add_argument("--watchlist-only", action="store_true",
+                    help="build only the stocks in stocks.txt")
     ap.add_argument("--months", type=int, default=DEFAULT_MONTHS,
                     help=f"months of history (default {DEFAULT_MONTHS})")
     ap.add_argument("--rebuild", action="store_true",
                     help="issue no requests; rebuild outputs from the cache only")
     args = ap.parse_args()
 
-    codes = [c.strip() for c in args.stocks.split(",")] if args.stocks else read_watchlist()
-    codes = [c for c in codes if c]
-    if not codes:
-        raise SystemExit("ERROR: no stocks. Add codes to stocks.txt or pass --stocks.")
-    for c in codes:
+    watchlist = read_watchlist()
+    explicit = [c.strip() for c in args.stocks.split(",") if c.strip()] if args.stocks else []
+    for c in watchlist + explicit:
         if not re.fullmatch(r"[0-9A-Z]{4,6}", c):
             raise SystemExit(f"ERROR: {c!r} is not a stock code")
+    tracked = set(watchlist) | set(explicit)
 
     today = date.today()
     end = f"{today.year:04d}-{today.month:02d}"
@@ -509,41 +535,74 @@ def main():
         y, m = y - 1, m + 12
     months = fd.month_range(f"{y:04d}-{m:02d}", end)
     t0 = time.time()
-    print(f"[{'REBUILD' if args.rebuild else 'FETCH'}] {', '.join(codes)} "
-          f"· {months[0]} -> {months[-1]}")
+    print(f"[{'REBUILD' if args.rebuild else 'FETCH'}] {months[0]} -> {months[-1]}")
 
-    # The K-bar months define the calendar for the shared whole-market queries.
+    # The TAIEX months (shared with fetch_data.py's cache) define the calendar.
     calendar = set()
-    for code in codes:
-        for ym in months:
-            calendar.update(fetch_stock_month(code, ym, args.rebuild)[1])
+    for ym in months:
+        calendar.update(fd.fetch_index_month(ym, args.rebuild))
     calendar = sorted(calendar)
     if not calendar:
         raise SystemExit("ERROR: no trading days retrieved; aborting.")
-    print(f"  {len(calendar)} trading days; institutional + margin, two queries per day")
+    print(f"  {len(calendar)} trading days; quotes + institutional + margin, "
+          "three whole-market queries per day")
 
-    market = {}
+    market, names = {}, {}
     for i, d in enumerate(calendar, 1):
         ymd = d.replace("-", "")
-        market[d] = (fetch_t86_day(ymd, args.rebuild), fetch_margin_all_day(ymd, args.rebuild))
+        quotes, nm = fetch_quotes_day(ymd, args.rebuild)
+        names.update(nm)                     # later days win: current names
+        market[d] = (quotes, fetch_t86_day(ymd, args.rebuild),
+                     fetch_margin_all_day(ymd, args.rebuild))
         if i % 25 == 0 or i == len(calendar):
             print(f"  {d}  {i}/{len(calendar)}  {(time.time() - t0) / 60:.1f} min", flush=True)
 
-    for code in codes:
-        s = build_stock(code, months, market, args.rebuild)
-        write_stock(s)
-        d = s["daily"]
-        cov = lambda k: sum(1 for r in d if r[k] is not None)  # noqa: E731
-        print(f"  {code} {s['name']}: {len(d)} days ({s['start']} -> {s['end']}) · "
-              f"法人 {cov('foreign')} · 融資 {cov('marginBalance')} · "
-              f"主力 {cov('mainForce')} · 股東週 {len(s['holders'])} · "
-              f"分點 {','.join(s['brokers']) or '-'} · 分點日 {len(s['brokerDaily'])}")
+    # Today's listing decides the universe; a delisted code drops out of it.
+    latest = next((market[d][0] for d in reversed(calendar) if market[d][0]), {})
+    if explicit:
+        codes = explicit
+    elif args.watchlist_only:
+        codes = watchlist
+    else:
+        codes = list(dict.fromkeys(
+            watchlist + sorted(c for c in latest if UNIVERSE_RE.fullmatch(c))))
+    if not codes:
+        raise SystemExit("ERROR: no stocks to build. Add codes to stocks.txt.")
+    print(f"  building {len(codes)} stock(s), {len(tracked & set(codes))} with broker data")
 
-    entries = write_index(list(dict.fromkeys(read_watchlist() + codes)))
+    built = failed = 0
+    for i, code in enumerate(codes, 1):
+        try:
+            s = build_stock(code, names.get(code), calendar, market, code in tracked,
+                            args.rebuild)
+        except Exception as e:  # noqa: BLE001 - one bad page must not sink the run
+            failed += 1
+            print(f"  !! {code} failed: {e}", file=sys.stderr)
+            continue
+        if s is None:
+            if code in tracked:
+                print(f"  !! {code}: no TWSE quotes in range (TPEx stocks are not supported)",
+                      file=sys.stderr)
+            continue
+        write_stock(s)
+        built += 1
+        if s["tracked"]:
+            d = s["daily"]
+            cov = lambda k: sum(1 for r in d if r[k] is not None)  # noqa: E731
+            print(f"  {code} {s['name']}: {len(d)} days ({s['start']} -> {s['end']}) · "
+                  f"法人 {cov('foreign')} · 融資 {cov('marginBalance')} · "
+                  f"主力 {cov('mainForce')} · 股東週 {len(s['holders'])} · "
+                  f"分點 {','.join(s['brokers']) or '-'} · 分點日 {len(s['brokerDaily'])}")
+        if i % 100 == 0:
+            print(f"  {i}/{len(codes)} stocks  {(time.time() - t0) / 60:.1f} min", flush=True)
+
+    entries = write_index(watchlist)
     st = fd._stats
-    print(f"  index: {len(entries)} stock(s) · {st['requests']} requests / "
-          f"{st['cache_hits']} cache hits / {st['retries']} retries · "
-          f"{(time.time() - t0) / 60:.1f} min")
+    print(f"  built {built}, failed {failed} · index: {len(entries)} stock(s) · "
+          f"{st['requests']} requests / {st['cache_hits']} cache hits / "
+          f"{st['retries']} retries · {(time.time() - t0) / 60:.1f} min")
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -50,10 +50,15 @@ function fixture() {
   // A past session's own broker table, as fetch_stocks.py stores it (arrays)
   stock.brokerDaily = { [daily[60].date]: { buy: [["過去券商", 10, 1, 9, 0.1]], sell: [["賣方", 1, 5, 4, 0.1]],
                                             totalBuy: 9, totalSell: 4 } };
-  return { stock, list: [{ code: "9999", name: "測試股", end: stock.end }] };
+  stock.tracked = true;
+  // A whole-market stock off the watchlist: same series, no broker data
+  const other = { ...stock, code: "8888", name: "另一檔", tracked: false, brokers: {}, brokerDaily: {},
+                  daily: daily.map(r => ({ ...r, mainForce: null })) };
+  return { stock, other, list: [{ code: "9999", name: "測試股", end: stock.end, tracked: true },
+                                { code: "8888", name: "另一檔", end: stock.end, tracked: false }] };
 }
 
-function buildHtml({ stock, list }) {
+function buildHtml({ stock, other, list }) {
   let html = read("stock.html");
   const STUB = `<script>
     HTMLCanvasElement.prototype.getContext = function(){
@@ -73,7 +78,7 @@ function buildHtml({ stock, list }) {
     `<script>${fs.readFileSync(require.resolve("echarts/dist/echarts.min.js"), "utf8")}</script>`);
   html = html.replace('<script src="data/stocks/index.js"></script>',
     `<script>window.STOCK_LIST=${JSON.stringify(list)};` +
-    `window.STOCK_DATA={"${stock.code}":${JSON.stringify(stock)}};</script>`);
+    `window.STOCK_DATA={"${stock.code}":${JSON.stringify(stock)},"${other.code}":${JSON.stringify(other)}};</script>`);
   return html.replace("renderer:'canvas'", "renderer:'svg'");
 }
 
@@ -182,6 +187,24 @@ module.exports = {
       await sleep(100);
       const z = chart.getOption().dataZoom[0];
       t.eq("1M range zooms to the last 21 sessions", [z.startValue, z.endValue], [59, 79]);
+
+      // ── Stock search ──
+      const q = doc.getElementById("q");
+      const search = v => { q.value = v; q.dispatchEvent(new window.Event("change")); };
+      t.eq("search box shows the stock", q.value, "9999 測試股");
+      t.eq("watchlist chip rendered", [...doc.querySelectorAll("#chips button")].map(b => b.dataset.code), ["9999"]);
+      search("另一");
+      await sleep(50);
+      t.eq("a partial name finds the stock", doc.getElementById("title").textContent, "8888 另一檔");
+      t.eq("an explicit pick goes into the URL", window.location.hash, "#8888");
+      t.ok("off-watchlist stock explains missing broker data",
+        /追蹤清單/.test(doc.getElementById("br-sum").textContent));
+      search("不存在的股票");
+      t.ok("no match says so and keeps the stock", /找不到/.test(doc.getElementById("q-msg").textContent) &&
+        doc.getElementById("title").textContent === "8888 另一檔");
+      doc.querySelector('#chips button[data-code="9999"]').click();
+      await sleep(50);
+      t.eq("chip switches back", doc.getElementById("title").textContent, "9999 測試股");
     } finally {
       window.close();
     }
