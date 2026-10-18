@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>個股籌碼監控 · TAIEX Atlas</title>
+<!-- Inline so the icon survives file:// and the deploy: one red and one green candle. -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231a1a19'/%3E%3Cpath d='M11 5V27M21 8V24' stroke='%238a897e' stroke-width='1.5'/%3E%3Crect x='7' y='10' width='8' height='12' rx='1' fill='%23e66767'/%3E%3Crect x='17' y='12' width='8' height='8' rx='1' fill='%231baf7a'/%3E%3C/svg%3E">
+<script>
+  // Before first paint, so a saved light theme never flashes dark. Shared by
+  // index.html and stock.html (same origin, same key).
+  (function(){ var t; try { t = localStorage.getItem('atlas-theme'); } catch(e) {}
+    document.documentElement.dataset.theme = t === 'light' ? 'light' : 'dark'; })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<style>
+  :root{
+    --bg:#12120f; --surface:#1a1a19; --surface-2:#232320; --line:#33332e;
+    --ink:#f0efec; --ink-2:#c3c2b7; --ink-3:#8a897e;
+
+    /* Same validated palette as index.html. Each hue keeps its meaning across
+       both pages: blue = foreign, amber = investment trust, purple = margin. */
+    --c-foreign:#3987e5;
+    --c-trust:#c98500;
+    --c-dealer:#8a897e;     /* dealers: the smallest desk, kept neutral */
+    --c-margin:#9085e9;
+    --c-holders:#c3c2b7;
+    --c-big:#c98500;
+    --c-ma5:#f0efec; --c-ma20:#c98500; --c-ma60:#3987e5;
+
+    /* Taiwan market convention: RED = up / buy, GREEN = down / sell. Sign is
+       also carried by position above/below zero, never by colour alone. */
+    --c-up:#e66767; --c-down:#1baf7a;
+
+    --line-2:#26261f; --ink-4:#4a4a44; --axis-pointer:#6a6a60;
+    --zoom-track:#3a3a34; --zoom-track-on:#5a5a52; --zoom-fill:#2e2e28;
+    --err-bg:#2b1a1a; --err-line:#5a2a2a; --err-ink:#f0c0c0;
+    color-scheme:dark;
+  }
+  :root[data-theme="light"]{
+    --bg:#f6f5f1; --surface:#ffffff; --surface-2:#efeee8; --line:#dddbd2;
+    --ink:#1b1b18; --ink-2:#45443e; --ink-3:#6f6e65;
+    --c-up:#d13c3c; --c-down:#0e8a5c;
+    --line-2:#eeede7; --ink-4:#b9b8ae; --axis-pointer:#8f8e84;
+    --zoom-track:#cfcdc4; --zoom-track-on:#a9a79d; --zoom-fill:#e6e4dc;
+    --err-bg:#fdeeee; --err-line:#f0c4c4; --err-ink:#8a2222;
+    color-scheme:light;
+    --c-foreign:#2468c4; --c-trust:#a86a00; --c-dealer:#8f8e84; --c-margin:#6a5bd6;
+    --c-holders:#45443e; --c-big:#a86a00;
+    --c-ma5:#1b1b18; --c-ma20:#a86a00; --c-ma60:#2468c4;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:"Inter","Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+    font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  }
+  .num{font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1}
+  .wrap{max-width:1500px;margin:0 auto;padding:20px 22px 60px}
+
+  header{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;justify-content:space-between;
+    padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:20px}
+  h1{font-size:20px;font-weight:600;margin:0;letter-spacing:-.01em}
+  .sub{color:var(--ink-3);font-size:12.5px;margin-top:4px}
+  .nav{font-size:12.5px;margin-bottom:6px}
+  .nav a{color:var(--ink-3);text-decoration:none}
+  .nav a:hover{color:var(--ink)}
+  .nav b{color:var(--ink);font-weight:500}
+  .controls{display:flex;flex-wrap:wrap;gap:18px;align-items:center}
+  .ctrl-label{color:var(--ink-3);font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+    display:block;margin-bottom:5px}
+  .seg{display:inline-flex;background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:2px}
+  .seg button{
+    appearance:none;border:0;background:transparent;color:var(--ink-2);
+    padding:5px 11px;font-size:13px;border-radius:5px;cursor:pointer;
+    font-variant-numeric:tabular-nums;font-family:inherit;transition:background .12s,color .12s}
+  .seg button:hover{color:var(--ink)}
+  .seg button[aria-pressed="true"]{background:var(--surface-2);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
+  .btn{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
+    padding:5px 10px;border-radius:7px;font-size:13px;cursor:pointer;font-family:inherit;line-height:1.3}
+  .btn:hover:not(:disabled){color:var(--ink);border-color:var(--ink-4)}
+  .btn:disabled,.seg button:disabled{opacity:.35;cursor:default}
+  .date-nav{display:inline-flex;align-items:center;gap:6px}
+  .date-nav input{background:var(--surface);color:var(--ink);border:1px solid var(--line);
+    border-radius:7px;padding:5px 8px;font:inherit;font-size:13px}
+  .chart-wrap{position:relative}
+  .chart-float{position:absolute;z-index:2;background:var(--bg)}
+  .seg-sm button{padding:2px 9px;font-size:12px}
+  select{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:7px;
+    padding:6px 10px;font:inherit;font-size:13px;min-width:12em}
+
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+  .kpi{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:13px 15px}
+  .kpi .k{color:var(--ink-3);font-size:11.5px;letter-spacing:.02em}
+  .kpi .v{font-size:23px;font-weight:600;margin-top:5px;letter-spacing:-.02em}
+  .kpi .n{color:var(--ink-3);font-size:11.5px;margin-top:2px}
+
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:8px 6px 4px;margin-bottom:20px}
+  .panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;
+    flex-wrap:wrap;padding:6px 10px 10px}
+  .panel-head .seg{background:var(--bg)}
+  h2{font-size:15px;font-weight:600;margin:0}
+  .hint{color:var(--ink-3);font-size:12px}
+  #chart{width:100%;height:1200px}
+  .legend{display:flex;flex-wrap:wrap;gap:16px;padding:6px 14px 10px;color:var(--ink-3);font-size:12px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:9px;height:9px;border-radius:2px;display:inline-block}
+
+  /* Broker tables: buy side and sell side next to each other */
+  .brokers{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:0 10px 10px}
+  .br-sum{display:flex;flex-wrap:wrap;gap:4px 18px;margin:0 10px 10px;padding:8px 12px;
+    background:var(--bg);border:1px solid var(--line);border-radius:7px;font-size:12.5px}
+  .br-sum span{white-space:nowrap}
+  .br-sum b{color:var(--ink-3);font-weight:400;margin-right:5px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  caption{text-align:left;font-size:12.5px;color:var(--ink-2);padding:2px 2px 6px}
+  th,td{padding:6px 9px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line-2)}
+  th{color:var(--ink-3);font-weight:500;font-size:11.5px;background:var(--surface-2)}
+  th:first-child,td:first-child{text-align:left}
+  tbody tr:last-child td{border-bottom:0}
+  .tbl{border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .neg{color:var(--c-down)} .pos{color:var(--c-up)}
+  .muted{color:var(--ink-3)}
+
+  footer{color:var(--ink-3);font-size:12px;margin-top:26px;line-height:1.7}
+  code{background:var(--surface-2);padding:1.5px 5px;border-radius:4px;font-size:12px}
+  .err{background:var(--err-bg);border:1px solid var(--err-line);color:var(--err-ink);padding:18px 20px;
+    border-radius:10px;line-height:1.7}
+
+  @media (max-width: 720px){
+    .wrap{padding:14px 12px 40px}
+    h1{font-size:17px}
+    header{gap:12px;padding-bottom:12px;margin-bottom:14px}
+    .controls{gap:10px 14px;width:100%}
+    .seg button{padding:6px 9px;font-size:12.5px}
+    .kpis{grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px}
+    .kpi{padding:10px 11px}
+    .kpi .v{font-size:19px}
+    .kpi .k,.kpi .n{font-size:10.5px}
+    .panel{padding:4px 2px 2px}
+    .legend{gap:10px;font-size:11px;padding:6px 8px 8px}
+    .brokers{grid-template-columns:1fr;padding:0 6px 8px}
+    th,td{padding:5px 6px;font-size:12px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <div class="nav"><a href="index.html">大盤修正波段</a> · <b>個股籌碼</b></div>
+      <h1 id="title">個股籌碼監控</h1>
+      <div class="sub" id="meta">載入中…</div>
+    </div>
+    <div class="controls">
+      <div>
+        <label class="ctrl-label" for="pick">個股</label>
+        <select id="pick"></select>
+      </div>
+      <div>
+        <label class="ctrl-label" for="d-pick">日期</label>
+        <div class="date-nav">
+          <button class="btn" id="d-prev" aria-label="前一交易日">‹</button>
+          <input type="date" id="d-pick" aria-label="檢視日期">
+          <button class="btn" id="d-next" aria-label="後一交易日">›</button>
+          <button class="btn" id="d-latest">最新</button>
+        </div>
+      </div>
+      <div>
+        <span class="ctrl-label">區間</span>
+        <div class="seg" id="seg-range" role="group" aria-label="圖表區間">
+          <button data-v="21">1M</button>
+          <button data-v="63">3M</button>
+          <button data-v="126" aria-pressed="true">6M</button>
+          <button data-v="252">1Y</button>
+          <button data-v="0">全部</button>
+        </div>
+      </div>
+      <div>
+        <span class="ctrl-label">&nbsp;</span>
+        <button class="btn" id="btn-theme" aria-label="切換深淺色">淺色</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="app" hidden>
+    <div class="kpis num" id="kpis"></div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>日 K 與籌碼</h2>
+        <span class="hint">單位：張 · 股東與大戶為每週集保資料 · 點圖表可切換日期</span>
+      </div>
+      <!-- Each 法人 button toggles its own series; positioned by renderChart()
+           on the flow panel's title row. -->
+      <div class="chart-wrap">
+        <div id="chart"></div>
+        <div class="seg seg-sm chart-float" id="seg-inst" role="group" aria-label="法人買賣超顯示">
+          <button data-v="foreign" aria-pressed="true">外資</button>
+          <button data-v="trust" aria-pressed="true">投信</button>
+          <button data-v="dealer" aria-pressed="true">自營商</button>
+          <button data-v="total" aria-pressed="true">合計</button>
+        </div>
+      </div>
+      <div class="legend">
+        <span><i class="dot" style="background:linear-gradient(135deg,var(--c-up) 50%,var(--c-down) 50%)"></i>K 線 / 量</span>
+        <span><i class="dot" style="background:var(--c-ma5)"></i>MA5</span>
+        <span><i class="dot" style="background:var(--c-ma20)"></i>MA20</span>
+        <span><i class="dot" style="background:var(--c-ma60)"></i>MA60</span>
+        <span><i class="dot" style="background:var(--c-foreign)"></i>外資</span>
+        <span><i class="dot" style="background:var(--c-trust)"></i>投信</span>
+        <span><i class="dot" style="background:var(--c-dealer)"></i>自營商</span>
+        <span><i class="dot" style="background:var(--c-up)"></i>買超 / 增加</span>
+        <span><i class="dot" style="background:var(--c-down)"></i>賣超 / 減少</span>
+        <span><i class="dot" style="background:var(--c-margin)"></i>融資餘額</span>
+        <span><i class="dot" style="background:var(--c-holders)"></i>股東人數</span>
+        <span><i class="dot" style="background:var(--c-big)"></i>大戶人數</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>主力進出 · 券商分點</h2>
+        <div class="seg" id="seg-period" role="group" aria-label="分點統計期間">
+          <button data-v="1" aria-pressed="true">近 1 日</button>
+          <button data-v="5">近 5 日</button>
+          <button data-v="20">近 20 日</button>
+          <button data-v="60">近 60 日</button>
+        </div>
+      </div>
+      <div class="br-sum num" id="br-sum"></div>
+      <div class="brokers num" id="brokers"></div>
+    </div>
+
+    <footer>
+      <p><strong>主力買賣超</strong> = 當期買超前 15 名券商分點合計 − 賣超前 15 名合計（富邦 e-Broker 定義）；
+      日序列以每日分點表回補整段期間。選擇過去日期時，近 1 日分點顯示當天資料，近 5/20/60 日統計只提供最新交易日。<strong>大戶</strong> = 集保持股 &gt; 400 張者，
+      提示框另列 &gt; 1000 張。</p>
+      <p>資料來源：臺灣證券交易所（個股日成交、三大法人買賣超 T86、融資融券彙總）、
+      神秘金字塔 norway.twsthr.info（集保股權分散）、富邦 e-Broker（主力進出）。
+      缺漏以斷點呈現，不以 0 補值。本頁僅描述已發生的籌碼變化，不構成投資建議。</p>
+    </footer>
+  </div>
+
+  <div id="error" class="err" hidden></div>
+</div>
+
+<script src="data/stocks/index.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  const CSS = getComputedStyle(document.documentElement);
+  const C = k => CSS.getPropertyValue(k).trim();
+  // Refilled on a theme change; renderers read COLORS at draw time.
+  const COLORS = {};
+  function readColors(){ Object.assign(COLORS, {
+    foreign:C('--c-foreign'), trust:C('--c-trust'), dealer:C('--c-dealer'),
+    margin:C('--c-margin'), holders:C('--c-holders'), big:C('--c-big'),
+    ma5:C('--c-ma5'), ma20:C('--c-ma20'), ma60:C('--c-ma60'),
+    up:C('--c-up'), down:C('--c-down'),
+    ink:C('--ink'), ink2:C('--ink-2'), ink3:C('--ink-3'), ink4:C('--ink-4'),
+    line:C('--line'), line2:C('--line-2'), surface:C('--surface'), pointer:C('--axis-pointer'),
+    zoomTrack:C('--zoom-track'), zoomTrackOn:C('--zoom-track-on'), zoomFill:C('--zoom-fill')
+  }); }
+  readColors();
+  const alpha = (hex, a) => {
+    const h = hex.replace('#','');
+    const n = parseInt(h.length===3 ? h.split('').map(c=>c+c).join('') : h, 16);
+    return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+  };
+
+  // ── Formatting ────────────────────────────────────────────
+  const has = v => v!==null && v!==undefined && !Number.isNaN(v);
+  const nf  = (v,d=0) => has(v) ? v.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}) : '—';
+  const sgn = (v,d=0) => has(v) ? (v>0?'+':'') + nf(v,d) : '—';
+  const cls = v => !has(v) || v===0 ? '' : v>0 ? 'pos' : 'neg';
+  const colorOf = v => !has(v) ? COLORS.ink2 : v>=0 ? COLORS.up : COLORS.down;
+  const fd  = d => d ? d.slice(0,4)+'/'+d.slice(5,7)+'/'+d.slice(8,10) : '—';
+  const gap = v => has(v) ? v : '-';          // '-' renders as a gap in ECharts
+  const sumOf = vs => { const xs = vs.filter(has); return xs.length ? xs.reduce((a,b)=>a+b,0) : null; };
+
+  const showError = html => {
+    const e = document.getElementById('error');
+    e.hidden = false; e.innerHTML = html;
+    document.getElementById('app').hidden = true;
+    document.getElementById('meta').textContent = '';
+  };
+
+  const LIST = window.STOCK_LIST;
+  if(!Array.isArray(LIST) || !LIST.length){
+    showError('<strong>找不到個股資料。</strong><br>請在 <code>stocks.txt</code> 加入股票代號，' +
+      '執行 <code>python3 fetch_stocks.py</code> 產生 <code>data/stocks/</code> 後重新整理本頁。');
+    return;
+  }
+
+  // ── State ─────────────────────────────────────────────────
+  let S = null;                 // the stock in view
+  let sel = 0;                  // index of the session being viewed
+  let range = 126, period = '1';
+  // Which 法人 series the flow panel draws. Independent toggles; at least one
+  // stays on.
+  const instOn = {foreign:true, trust:true, dealer:true, total:true};
+  const INST = {foreign:'外資', trust:'投信', dealer:'自營商', total:'合計'};
+  const DEFAULT_CODE = '2330';
+
+  const pick = document.getElementById('pick');
+  pick.innerHTML = LIST.map(s=>`<option value="${s.code}">${s.code} ${s.name||''}</option>`).join('');
+
+  // Each stock is its own <script>, injected on demand: works over file://,
+  // where fetch() of a local JSON file is blocked.
+  function loadStock(code){
+    window.STOCK_DATA = window.STOCK_DATA || {};
+    if(window.STOCK_DATA[code]) return Promise.resolve(window.STOCK_DATA[code]);
+    return new Promise((resolve, reject)=>{
+      const s = document.createElement('script');
+      s.src = `data/stocks/${encodeURIComponent(code)}.js`;
+      s.onload = () => window.STOCK_DATA[code] ? resolve(window.STOCK_DATA[code]) : reject();
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  // ── Derived series ────────────────────────────────────────
+  function derive(s){
+    const rows = s.daily;
+    const dates = rows.map(r=>r.date);
+    const ma = n => rows.map((_,i)=>{
+      if(i < n-1) return '-';
+      const xs = rows.slice(i-n+1, i+1).map(r=>r.close);
+      return xs.every(has) ? +(xs.reduce((a,b)=>a+b,0)/n).toFixed(2) : '-';
+    });
+    // Weekly shareholder rows land on the last session on or before their
+    // data date (TDCC dates a week by its last business day, which is a
+    // trading day except across a market holiday).
+    const weekAt = new Array(rows.length).fill(null);
+    let j = 0;
+    for(const h of s.holders || []){
+      if(h.date < dates[0] || h.date > dates[dates.length-1]) continue;
+      while(j+1 < dates.length && dates[j+1] <= h.date) j++;
+      weekAt[j] = h;
+    }
+    return { rows, dates, weekAt, ma5:ma(5), ma20:ma(20), ma60:ma(60),
+      ohlc: rows.map(r => [r.open,r.close,r.low,r.high].every(has) ? [r.open,r.close,r.low,r.high] : '-'),
+      instTotal: rows.map(r => sumOf([r.foreign, r.trust, r.dealer])) };
+  }
+
+  // ── KPI cards ─────────────────────────────────────────────
+  function renderKpis(){
+    // Everything on the cards is "as of" the selected session.
+    const R = S.rows.slice(0, sel+1), n = R.length, last = R[n-1], prev = R[n-2] || {};
+    const lastN = (k, d) => sumOf(R.slice(-d).map(r=>r[k]));
+    const chg = has(last.close) && has(prev.close) ? last.close - prev.close : null;
+    const pct = has(chg) && prev.close ? chg/prev.close*100 : null;
+    const H = (S.stock.holders||[]).filter(h => h.date <= last.date), h1 = H[H.length-1], h0 = H[H.length-2];
+    const hd = (k) => h1 && h0 && has(h1[k]) && has(h0[k]) ? h1[k]-h0[k] : null;
+    // Main force runs a day behind the TWSE data on some evenings; quote the
+    // latest day it actually has (up to the selected one) rather than a blank.
+    const mfRow = [...R].reverse().find(r=>has(r.mainForce));
+    const mfIdx = mfRow ? R.indexOf(mfRow) : -1;
+    const mf5 = mfIdx >= 0 ? sumOf(R.slice(Math.max(0,mfIdx-4), mfIdx+1).map(r=>r.mainForce)) : null;
+
+    const card = (k, v, n, c='') =>
+      `<div class="kpi"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="n">${n}</div></div>`;
+    const flow = (label, key) => card(label+'買賣超', sgn(last[key]),
+      `5 日 <span class="${cls(lastN(key,5))}">${sgn(lastN(key,5))}</span> · 20 日 <span class="${cls(lastN(key,20))}">${sgn(lastN(key,20))}</span>`,
+      cls(last[key]));
+
+    document.getElementById('kpis').innerHTML = [
+      card(`收盤 · ${fd(last.date)}`, nf(last.close,2),
+        `<span class="${cls(chg)}">${sgn(chg,2)} (${sgn(pct,2)}%)</span> · 量 ${nf(last.volume)} 張`, cls(chg)),
+      flow('外資', 'foreign'), flow('投信', 'trust'), flow('自營商', 'dealer'),
+      card(`主力買賣超${mfRow && mfRow!==last ? ' · '+fd(mfRow.date).slice(5) : ''}`,
+        sgn(mfRow ? mfRow.mainForce : null), `5 日 <span class="${cls(mf5)}">${sgn(mf5)}</span>`,
+        cls(mfRow ? mfRow.mainForce : null)),
+      card('融資餘額', nf(last.marginBalance),
+        `增減 <span class="${cls(last.marginChange)}">${sgn(last.marginChange)}</span> · 5 日 <span class="${cls(lastN('marginChange',5))}">${sgn(lastN('marginChange',5))}</span>`),
+      card(`股東人數${h1 ? ' · '+fd(h1.date).slice(5) : ''}`, nf(h1 && h1.holders),
+        `較前週 <span class="${cls(hd('holders'))}">${sgn(hd('holders'))}</span>`),
+      card('大戶人數 (>400張)', nf(h1 && h1.big400),
+        `較前週 <span class="${cls(hd('big400'))}">${sgn(hd('big400'))}</span> · 持股 ${nf(h1 && h1.big400Pct,2)}% (<span class="${cls(hd('big400Pct'))}">${sgn(hd('big400Pct'),2)}</span>)`)
+    ].join('');
+  }
+
+  // ── Chart ─────────────────────────────────────────────────
+  // Stacked panels on one shared trading-day axis, each metric in its own
+  // panel rather than sharing a dual y-axis.
+  const NAMES = ['日 K','成交量（張）','三大法人買賣超（張）','主力買賣超（張）',
+                 '融資增減（張）','融資餘額（張）','股東人數','大戶人數（>400 張）'];
+  const P = {K:0, VOL:1, INST:2, MAIN:3, MCHG:4, MBAL:5, HOLD:6, BIG:7};
+  const LAST = NAMES.length - 1;
+  const isNarrow = () => window.innerWidth <= 720;
+
+  document.getElementById('app').hidden = false;      // measure a visible box
+  const chart = echarts.init(document.getElementById('chart'), null, {renderer:'canvas'});
+
+  function layout(){
+    const narrow = isNarrow();
+    const gapH = narrow ? 38 : 30, top0 = 26, foot = narrow ? 34 : 44;
+    const mainH = narrow ? 200 : 280, subH = narrow ? 62 : 84;
+    const grids = []; let top = top0;
+    NAMES.forEach((name,i)=>{ const h = i===0 ? mainH : subH; grids.push({name, top, height:h}); top += h + gapH; });
+    return { grids, narrow, left: narrow ? 46 : 70, right: narrow ? 12 : 26, totalH: top + foot };
+  }
+
+  // The window ends at the selected session, with a little room after it
+  // when there is any, so the day in focus is never pinned to the edge.
+  const zoomOpt = () => {
+    const n = S.dates.length;
+    if(!range || range >= n) return {start:0, end:100};
+    const end = Math.min(n-1, sel + Math.round(range/6));
+    return {startValue:Math.max(0, end-range+1), endValue:end};
+  };
+
+  function tooltipFormatter(params){
+    if(!params || !params.length) return '';
+    const i = params[0].dataIndex, r = S.rows[i];
+    if(!r) return '';
+    const p = S.rows[i-1];
+    const li = (label,val,color)=>
+      `<div style="display:flex;justify-content:space-between;gap:18px;line-height:1.65">
+         <span style="color:${COLORS.ink3}">${color?`<i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:6px"></i>`:''}${label}</span>
+         <span style="font-variant-numeric:tabular-nums;color:${COLORS.ink}">${val}</span></div>`;
+    const sv = v => has(v) ? `<span style="color:${colorOf(v)}">${sgn(v)}</span>` : '—';
+    const chg = p && has(r.close) && has(p.close) ? r.close-p.close : null;
+    const h = S.weekAt[i];
+    return `<div style="min-width:220px;font-size:12.5px">
+      <div style="color:${COLORS.ink};font-weight:600;margin-bottom:6px">${fd(r.date)}</div>
+      ${li('開 / 收', `${nf(r.open,2)} / ${nf(r.close,2)}`)}
+      ${li('高 / 低', `${nf(r.high,2)} / ${nf(r.low,2)}`)}
+      ${li('漲跌', has(chg) ? `<span style="color:${colorOf(chg)}">${sgn(chg,2)} (${sgn(chg/p.close*100,2)}%)</span>` : '—')}
+      ${li('成交量', nf(r.volume)+' 張')}
+      ${li('外資', sv(r.foreign), COLORS.foreign)}
+      ${li('投信', sv(r.trust), COLORS.trust)}
+      ${li('自營商', sv(r.dealer), COLORS.dealer)}
+      ${li('三大法人合計', sv(S.instTotal[i]))}
+      ${li('主力買賣超', sv(r.mainForce))}
+      ${li('融資增減', sv(r.marginChange))}
+      ${li('融資餘額', nf(r.marginBalance), COLORS.margin)}
+      ${h ? `<div style="margin-top:6px;padding-top:5px;border-top:1px solid ${COLORS.line}">
+        ${li('股東人數 '+fd(h.date).slice(5), nf(h.holders), COLORS.holders)}
+        ${li('>400 張 人數 / 持股', `${nf(h.big400)} / ${nf(h.big400Pct,2)}%`, COLORS.big)}
+        ${li('>1000 張 人數 / 持股', `${nf(h.big1000)} / ${nf(h.big1000Pct,2)}%`)}</div>` : ''}
+    </div>`;
+  }
+
+  const signBars = (name, data, i) => ({
+    name, type:'bar', data, xAxisIndex:i, yAxisIndex:i, barMaxWidth:8,
+    itemStyle:{borderRadius:[2,2,0,0], color:p => p.value>=0 ? COLORS.up : COLORS.down},
+    markLine:{silent:true, symbol:'none', data:[{yAxis:0}], lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}}
+  });
+  const line = (name, data, i, color, extra={}) => ({
+    name, type:'line', data, xAxisIndex:i, yAxisIndex:i, showSymbol:false, symbolSize:6,
+    lineStyle:{width:extra.width||2, color}, itemStyle:{color}, ...extra
+  });
+
+  // A dashed vertical rule on every panel at the selected session. Hung on
+  // empty line series with fixed ids, so a date change can move it without
+  // rebuilding the chart (and losing the user's zoom).
+  const selMarks = () => NAMES.map((_,i)=>({
+    id:'sel'+i, type:'line', data:[], silent:true, xAxisIndex:i, yAxisIndex:i,
+    markLine:{silent:true, symbol:'none', animation:false, label:{show:false},
+      lineStyle:{color:COLORS.ink3, width:1, type:'dashed'}, data:[{xAxis:S.dates[sel]}]}
+  }));
+
+  // 法人 panel: one item on → red/green bars by sign, like every other flow
+  // panel. Several → the desks stack in their own hues (buys above zero, sells
+  // below) and 合計 is a line over them. 合計 is always all three desks.
+  function instSeries(){
+    const R = S.rows;
+    const on = Object.keys(INST).filter(k=>instOn[k]);
+    const val = k => k==='total' ? S.instTotal.map(gap) : R.map(r=>gap(r[k]));
+    if(on.length === 1) return [signBars(INST[on[0]]+'買賣超', val(on[0]), P.INST)];
+    return [
+      ...on.filter(k=>k!=='total').map(k=>({
+        name:INST[k], type:'bar', stack:'inst', data:val(k), barMaxWidth:8,
+        xAxisIndex:P.INST, yAxisIndex:P.INST, itemStyle:{color:COLORS[k]} })),
+      ...(instOn.total ? [line('三大法人合計', val('total'), P.INST, COLORS.ink, {
+        lineStyle:{width:1, color:COLORS.ink, opacity:.7}})] : []),
+      { type:'line', data:[], silent:true, xAxisIndex:P.INST, yAxisIndex:P.INST,
+        markLine:{silent:true, symbol:'none', data:[{yAxis:0}], lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}} }
+    ];
+  }
+  const instTitle = () => {
+    const on = Object.keys(INST).filter(k=>instOn[k]);
+    return on.length === 1 ? `${on[0]==='total' ? '三大法人合計' : INST[on[0]]}買賣超（張）` : NAMES[P.INST];
+  };
+
+  function renderChart(){
+    const L = layout();
+    const el = document.getElementById('chart');
+    if(parseInt(el.style.height,10) !== L.totalH){ el.style.height = L.totalH+'px'; chart.resize(); }
+    const R = S.rows, dates = S.dates;
+    const weekly = k => S.weekAt.map(h => h && has(h[k]) ? h[k] : '-');
+    const all = NAMES.map((_,i)=>i);
+
+    chart.setOption({
+      backgroundColor:'transparent', animation:false,
+      textStyle:{fontFamily:'Inter, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif'},
+      title: L.grids.map((g,i)=>({text: i===P.INST ? instTitle() : g.name, left:L.narrow?8:L.left+4, top:g.top-(L.narrow?19:17),
+        textStyle:{color:COLORS.ink3, fontSize:L.narrow?10:11.5, fontWeight:500}})),
+      grid: L.grids.map(g=>({left:L.left, right:L.right, top:g.top, height:g.height})),
+      xAxis: all.map(i=>({
+        type:'category', data:dates, gridIndex:i,
+        axisLine:{lineStyle:{color:COLORS.line}}, axisTick:{show:false}, splitLine:{show:false},
+        axisPointer:{show:true, label:{show:i===LAST, backgroundColor:COLORS.line, color:COLORS.ink}},
+        axisLabel: i===LAST ? {color:COLORS.ink3, fontSize:L.narrow?9:11, hideOverlap:true,
+          formatter:v=>v.slice(5,7)+'/'+v.slice(8,10)} : {show:false}
+      })),
+      yAxis: all.map(i=>({
+        type:'value', gridIndex:i, scale: i===P.K || i===P.MBAL || i===P.HOLD || i===P.BIG,
+        splitNumber: i===0 ? 5 : 3,
+        axisLine:{show:false}, axisTick:{show:false}, splitLine:{lineStyle:{color:COLORS.line2}},
+        axisLabel:{color:COLORS.ink3, fontSize:L.narrow?9:11, formatter:v=>{
+          const a = Math.abs(v);
+          if(a>=10000) return (v/10000).toFixed(v%10000===0 ? 0 : v%1000===0 ? 1 : 2)+'萬';
+          if(L.narrow && a>=1000) return (v/1000).toFixed(0)+'k';
+          return nf(v, i===P.K && a<100 ? 1 : 0);
+        }}
+      })),
+      axisPointer:{link:[{xAxisIndex:'all'}], lineStyle:{color:COLORS.pointer, width:1, type:'dashed'},
+        label:{backgroundColor:COLORS.line}},
+      tooltip:{trigger:'axis', axisPointer:{type:'cross'},
+        backgroundColor:alpha(COLORS.surface,.97), borderColor:COLORS.line, borderWidth:1,
+        padding:L.narrow?[8,9]:[10,12], confine:true,
+        extraCssText:'backdrop-filter:blur(4px);border-radius:8px;max-width:88vw',
+        textStyle:{color:COLORS.ink, fontSize:L.narrow?11:12.5}, formatter:tooltipFormatter},
+      dataZoom:[
+        {type:'inside', xAxisIndex:all, ...zoomOpt(), moveOnMouseMove:!L.narrow, preventDefaultMouseMove:!L.narrow},
+        {type:'slider', xAxisIndex:all, height:L.narrow?26:20, bottom:10, ...zoomOpt(),
+         backgroundColor:COLORS.surface, borderColor:COLORS.line, fillerColor:alpha(COLORS.foreign,.14),
+         handleStyle:{color:COLORS.ink4}, moveHandleStyle:{color:COLORS.ink4},
+         dataBackground:{lineStyle:{color:COLORS.zoomTrack}, areaStyle:{color:COLORS.line2}},
+         selectedDataBackground:{lineStyle:{color:COLORS.zoomTrackOn}, areaStyle:{color:COLORS.zoomFill}},
+         textStyle:{color:COLORS.ink3, fontSize:10},
+         labelFormatter:v => dates[Math.round(v)] ? fd(dates[Math.round(v)]) : ''}
+      ],
+      series:[
+        { name:'日K', type:'candlestick', data:S.ohlc, xAxisIndex:0, yAxisIndex:0, barMaxWidth:10,
+          itemStyle:{color:COLORS.up, borderColor:COLORS.up, color0:COLORS.down, borderColor0:COLORS.down} },
+        line('MA5',  S.ma5,  0, COLORS.ma5,  {width:1}),
+        line('MA20', S.ma20, 0, COLORS.ma20, {width:1}),
+        line('MA60', S.ma60, 0, COLORS.ma60, {width:1}),
+
+        { name:'成交量', type:'bar', xAxisIndex:P.VOL, yAxisIndex:P.VOL, barMaxWidth:8,
+          data: R.map((r,i)=>({value:gap(r.volume),
+            itemStyle:{color: has(r.close) && has(r.open) && r.close < r.open ? COLORS.down : COLORS.up}})) },
+
+        ...instSeries(),
+
+        signBars('主力買賣超', R.map(r=>gap(r.mainForce)), P.MAIN),
+        signBars('融資增減', R.map(r=>gap(r.marginChange)), P.MCHG),
+        line('融資餘額', R.map(r=>gap(r.marginBalance)), P.MBAL, COLORS.margin,
+          {areaStyle:{color:alpha(COLORS.margin,.10)}}),
+        // Weekly points on a daily axis: connect across the days in between.
+        line('股東人數', weekly('holders'), P.HOLD, COLORS.holders, {connectNulls:true, showSymbol:true, symbolSize:4}),
+        line('大戶人數', weekly('big400'), P.BIG, COLORS.big, {connectNulls:true, showSymbol:true, symbolSize:4}),
+        ...selMarks()
+      ]
+    }, {notMerge:true});
+
+    const instSeg = document.getElementById('seg-inst');
+    instSeg.style.top   = (L.grids[P.INST].top - 30) + 'px';
+    instSeg.style.right = L.right + 'px';
+  }
+
+  // ── Broker tables ─────────────────────────────────────────
+  // The 5/20/60-day windows exist only as of the latest session (the source
+  // publishes them that way); an earlier date gets that day's own table.
+  const isLatest = () => sel === S.rows.length - 1;
+  function brokersFor(){
+    if(period !== '1') return isLatest() ? (S.stock.brokers || {})[period] : null;
+    const d = S.dates[sel];
+    const latest = (S.stock.brokers || {})['1'];
+    if(latest && latest.updated === d) return latest;
+    const c = (S.stock.brokerDaily || {})[d];
+    if(!c) return null;
+    const obj = x => ({name:x[0], buy:x[1], sell:x[2], net:x[3], pct:x[4]});
+    return {updated:d, buy:c.buy.map(obj), sell:c.sell.map(obj)};
+  }
+  function renderBrokers(){
+    document.querySelectorAll('#seg-period button').forEach(b=>{
+      b.disabled = b.dataset.v !== '1' && !isLatest();
+    });
+    const b = brokersFor();
+    const box = document.getElementById('brokers'), sum = document.getElementById('br-sum');
+    if(!b){
+      sum.innerHTML = period !== '1' && !isLatest()
+        ? `<span class="muted">近 ${period} 日統計只提供最新交易日；${fd(S.dates[sel])} 請看近 1 日</span>`
+        : `<span class="muted">${fd(S.dates[sel])} 沒有分點資料</span>`;
+      box.innerHTML = '';
+      return;
+    }
+    const buySum = sumOf(b.buy.map(x=>x.net)), sellSum = sumOf(b.sell.map(x=>x.net));
+    const net = has(buySum) && has(sellSum) ? buySum - sellSum : null;
+    sum.innerHTML = [
+      `<span><b>資料日</b>${fd(b.updated)}</span>`,
+      `<span><b>前 ${b.buy.length} 名買超合計</b><span class="pos">${nf(buySum)}</span></span>`,
+      `<span><b>前 ${b.sell.length} 名賣超合計</b><span class="neg">${nf(sellSum)}</span></span>`,
+      `<span><b>主力買賣超</b><span class="${cls(net)}">${sgn(net)}</span> 張</span>`
+    ].join('');
+    // Sell-side "net" arrives as a positive 賣超 count; the column says so.
+    const table = (title, list, c) => `<div class="tbl"><table>
+      <caption>${title}</caption>
+      <thead><tr><th>券商分點</th><th>買進</th><th>賣出</th><th>${c==='pos'?'買超':'賣超'}</th><th>佔成交比重</th></tr></thead>
+      <tbody>${list.map(x=>`<tr><td>${x.name}</td><td>${nf(x.buy)}</td><td>${nf(x.sell)}</td>
+        <td class="${c}">${nf(x.net)}</td><td>${has(x.pct) ? nf(x.pct,2)+'%' : '—'}</td></tr>`).join('')}</tbody>
+    </table></div>`;
+    box.innerHTML = table('買超券商', b.buy, 'pos') + table('賣超券商', b.sell, 'neg');
+  }
+
+  // ── Wiring ────────────────────────────────────────────────
+  function show(code){
+    return loadStock(code).then(stock=>{
+      S = { stock, ...derive(stock) };
+      if(!S.rows.length) throw new Error('empty');
+      pick.value = code;
+      document.getElementById('title').textContent = `${stock.code} ${stock.name}`;
+      document.title = `${stock.code} ${stock.name} · 個股籌碼監控`;
+      document.getElementById('meta').textContent =
+        `${fd(stock.start)} – ${fd(stock.end)} · ${S.rows.length} 個交易日 · 更新於 ${stock.generatedAt.replace('T',' ')}`;
+      sel = S.rows.length - 1;
+      syncDate();
+      renderKpis(); renderChart(); renderBrokers();
+    }).catch(()=>{
+      showError(`<strong>${code} 的資料載入失敗。</strong><br>請執行 <code>python3 fetch_stocks.py</code>，` +
+        `確認 <code>data/stocks/${code}.js</code> 已產生。`);
+    });
+  }
+
+  function seg(id, apply){
+    const box = document.getElementById(id);
+    box.addEventListener('click', e=>{
+      const b = e.target.closest('button'); if(!b) return;
+      box.querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed', x===b ? 'true' : 'false'));
+      apply(b.dataset.v);
+    });
+  }
+  seg('seg-range', v=>{ range = +v; if(S) chart.dispatchAction({type:'dataZoom', ...zoomOpt()}); });
+  seg('seg-period', v=>{ period = v; if(S) renderBrokers(); });
+  // Only an explicit pick goes into the URL, so a plain visit always opens on
+  // the default stock rather than whichever one was last looked at.
+  pick.addEventListener('change', ()=>{ history.replaceState(null, '', '#'+pick.value); show(pick.value); });
+
+  // ── Date ──────────────────────────────────────────────────
+  const dPick = document.getElementById('d-pick');
+  function syncDate(){
+    dPick.min = S.dates[0]; dPick.max = S.dates[S.dates.length-1];
+    dPick.value = S.dates[sel];
+    document.getElementById('d-prev').disabled = sel === 0;
+    document.getElementById('d-next').disabled = isLatest();
+    document.getElementById('d-latest').disabled = isLatest();
+  }
+  // rezoom: move the chart window to the day (date box, buttons). A click on
+  // the chart itself keeps the user's window and only moves the marker.
+  function setSel(i, rezoom){
+    if(!S) return;
+    sel = Math.max(0, Math.min(S.rows.length-1, i));
+    syncDate(); renderKpis(); renderBrokers();
+    if(rezoom) chart.dispatchAction({type:'dataZoom', ...zoomOpt()});
+    chart.setOption({series: selMarks()});
+  }
+  dPick.addEventListener('change', ()=>{
+    const v = dPick.value;
+    if(!v) return syncDate();
+    // A non-trading day snaps back to the session on or before it.
+    let i = S.dates.length - 1;
+    while(i > 0 && S.dates[i] > v) i--;
+    setSel(i, true);
+  });
+  document.getElementById('d-prev').addEventListener('click', ()=>setSel(sel-1, true));
+  document.getElementById('d-next').addEventListener('click', ()=>setSel(sel+1, true));
+  document.getElementById('d-latest').addEventListener('click', ()=>setSel(S.rows.length-1, true));
+  chart.getZr().on('click', e=>{
+    if(!S) return;
+    const pt = [e.offsetX, e.offsetY];
+    if(!NAMES.some((_,i)=>chart.containPixel({gridIndex:i}, pt))) return;
+    const i = chart.convertFromPixel({xAxisIndex:0}, pt)[0];
+    if(Number.isFinite(i)) setSel(Math.round(i), false);
+  });
+
+  // ── 法人 toggles ──────────────────────────────────────────
+  document.getElementById('seg-inst').addEventListener('click', e=>{
+    const b = e.target.closest('button'); if(!b) return;
+    const k = b.dataset.v;
+    if(instOn[k] && Object.values(instOn).filter(Boolean).length === 1) return;  // keep one on
+    instOn[k] = !instOn[k];
+    b.setAttribute('aria-pressed', instOn[k] ? 'true' : 'false');
+    if(S){
+      // Rebuild, but keep the window the user is looking at.
+      const dz = (chart.getOption().dataZoom || [])[0];
+      renderChart();
+      if(dz) chart.dispatchAction({type:'dataZoom', startValue:dz.startValue, endValue:dz.endValue});
+    }
+  });
+  window.addEventListener('hashchange', ()=>{
+    const c = location.hash.slice(1);
+    if(c && (!S || c !== S.stock.code) && LIST.some(s=>s.code===c)) show(c);
+  });
+  let resizeT;
+  window.addEventListener('resize', ()=>{
+    clearTimeout(resizeT);
+    resizeT = setTimeout(()=>{ if(S){ chart.resize(); renderChart(); } }, 150);
+  });
+
+
+  // ── Theme ─────────────────────────────────────────────────
+  const themeBtn = document.getElementById('btn-theme');
+  const syncThemeBtn = () => {
+    const dark = document.documentElement.dataset.theme !== 'light';
+    themeBtn.textContent = dark ? '☀ 淺色' : '☾ 深色';
+    themeBtn.setAttribute('aria-pressed', dark ? 'false' : 'true');
+  };
+  syncThemeBtn();
+  themeBtn.addEventListener('click', ()=>{
+    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('atlas-theme', next); } catch(e) {}
+    syncThemeBtn();
+    readColors();
+    if(S){
+      const dz = (chart.getOption().dataZoom || [])[0];
+      renderKpis(); renderChart(); renderBrokers();
+      if(dz) chart.dispatchAction({type:'dataZoom', startValue:dz.startValue, endValue:dz.endValue});
+    }
+  });
+
+  const want = location.hash.slice(1);
+  const has_ = c => LIST.some(s=>s.code===c);
+  show(has_(want) ? want : has_(DEFAULT_CODE) ? DEFAULT_CODE : LIST[0].code);
+})();
+</script>
+</body>
+</html>

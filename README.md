@@ -66,6 +66,32 @@ fetch_data.py   →   data/taiex-daily.{json,js}   →   index.html
 
 本專案只描述已發生的籌碼變化，不構成投資建議。
 
+## 個股籌碼監控（`stock.html`）
+
+追蹤 `stocks.txt` 觀察清單裡的個股，**不做波段 / 回撤分析**，只呈現籌碼：
+
+| 面板 | 來源 | 頻率 |
+|---|---|---|
+| 日 K（含 MA5/20/60）、成交量 | TWSE `afterTrading/STOCK_DAY` | 日（按月查詢） |
+| 三大法人買賣超（外資 / 投信 / 自營商，堆疊） | TWSE `fund/T86` | 日 |
+| 融資增減、融資餘額 | TWSE `marginTrading/MI_MARGN`（ALL） | 日 |
+| 股東人數、大戶人數（>400 張，提示框另列 >1000 張） | [神秘金字塔](https://norway.twsthr.info/StockHolders.aspx?stock=2327) | 週 |
+| 主力買賣超、券商分點買賣超前 15 名（1/5/20/60 日） | [富邦 e-Broker](https://fubon-ebrokerdj.fbs.com.tw/z/zc/zco/zco_2327.djhtm) | 日 |
+
+```bash
+echo 2317 >> stocks.txt          # 加入觀察清單（第一檔為預設開啟；僅支援上市股票）
+python3 fetch_stocks.py          # 預設抓 12 個月；--months 24 加深、--stocks 2327,2330 臨時指定
+```
+
+- 單位一律為**張**。T86 與融資每日為全市場一次查詢，快取只保留需要的欄位，清單上所有股票共用；
+  新增股票只多出它自己的月 K、每日分點表與幾個網頁。首次抓 12 個月約 15–25 分鐘。
+- 主力日序列：富邦序列只回溯約 45 個交易日，其餘以逐日分點表（自設區間查詢，過去日永久快取）回補；
+  分點表也隨資料一起輸出，頁面上的**日期**欄可檢視任一交易日的籌碼與當日分點。
+- 三大法人面板右上可分別開關外資 / 投信 / 自營商 / 合計；只開一項時以紅綠柱顯示。
+- 預設開啟 2330（`stock.html#2327` 可直接開其他股票）。
+- 集保股權分散在減資 / 分割當週會出現「1 人持有 100%」的佔位列，一律剔除。
+- `run.sh`、`update_data.sh` 在 `stocks.txt` 存在時自動一併更新；個股抓取失敗只記警告，不影響大盤資料。
+
 ## 測試
 
 ```bash
@@ -77,6 +103,7 @@ npm test      # 全部；node tests/run.js detect 只跑名稱含 detect 的套�
 |---|---|
 | `tests/detect.test.js` | 演算法規則，跑在手工序列上 |
 | `tests/fetch_test.py` | 抓取腳本的解析與快取（不連網） |
+| `tests/stock_fetch_test.py` | 個股抓取的解析（不連網） |
 | `tests/render.test.js` | 在 jsdom 中實際執行 `index.html` |
 | `tests/bundle.test.js` | `dist/` 是否落後於來源 |
 | `verify.js` | 真實資料完整性與已知波段比對 |
@@ -85,9 +112,11 @@ npm test      # 全部；node tests/run.js detect 只跑名稱含 detect 的套�
 
 ```
 fetch_data.py    抓取 + 快取 + 合併
+fetch_stocks.py  個股抓取（stocks.txt 觀察清單）
 detect.js        修正波段偵測
 verify.js        資料與演算法驗證
-index.html       儀表板（CDN 載入 ECharts）
+index.html       大盤儀表板（CDN 載入 ECharts）
+stock.html       個股籌碼頁
 bundle.py        打包單檔離線 HTML
 run.sh           本機抓取 + 伺服器 / deploy
 update_data.sh   cron 每日更新

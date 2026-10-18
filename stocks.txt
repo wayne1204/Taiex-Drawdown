@@ -1,0 +1,4 @@
+# Watchlist for stock.html - one TWSE stock code per line, # for comments.
+# The first entry is the stock the page opens on.
+2330  # 台積電
+2327  # 國巨
