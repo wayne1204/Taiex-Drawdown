@@ -492,10 +492,10 @@
   // of a 390px screen, and the full stack needs the page to scroll rather than
   // each panel being squashed.
   const NAMES = ['加權指數','成交金額（億元）','買賣超（億元）',
-                 '累計買賣超（億元）','融資餘額（億元）','融資增減（億元）'];
+                 '累計買賣超（億元）','融資增減（億元）','融資餘額（億元）'];
   const CUM = 3;                 // computed title: desk name + rebase date
   const FLOW = 2;                // computed title: desk name
-  const MGN = 4, MGN_CHG = 5;
+  const MGN_CHG = 4, MGN = 5;
   const isNarrow = () => window.innerWidth <= 720;
 
   function layout(){
@@ -706,12 +706,6 @@
             lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}},
           markArea: markAreaFor(episodes, false) },
 
-        { name:'融資餘額', type:'line', data:mgn, xAxisIndex:MGN, yAxisIndex:MGN,
-          showSymbol:false, symbolSize:8, connectNulls:false,
-          lineStyle:{width:2, color:COLORS.margin},
-          areaStyle:{color:alpha(COLORS.margin,.10)},
-          markArea: markAreaFor(episodes, false) },
-
         // Same red-up / green-down bars as the desk flows, so a margin build-up
         // and a foreign sell-off read in one visual language.
         { name:'融資增減', type:'bar', data:mgnChg.map(gap), xAxisIndex:MGN_CHG, yAxisIndex:MGN_CHG,
@@ -719,6 +713,12 @@
             color:p => (p.value>=0 ? COLORS.up : COLORS.down) }, barMaxWidth:6,
           markLine:{silent:true, symbol:'none', data:[{yAxis:0}],
             lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}},
+          markArea: markAreaFor(episodes, false) },
+
+        { name:'融資餘額', type:'line', data:mgn, xAxisIndex:MGN, yAxisIndex:MGN,
+          showSymbol:false, symbolSize:8, connectNulls:false,
+          lineStyle:{width:2, color:COLORS.margin},
+          areaStyle:{color:alpha(COLORS.margin,.10)},
           markArea: markAreaFor(episodes, false) }
       ]
     };

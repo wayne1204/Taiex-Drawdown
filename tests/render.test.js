@@ -463,7 +463,7 @@ module.exports = {
 
           // 融資增減 bars are the day-on-day change of 融資餘額.
           {
-            const bars = (chart.getOption().series || [])[5];
+            const bars = (chart.getOption().series || [])[4];
             const i = D.length - 1;
             const m0 = D[i - 1].marginBalanceYi, m1 = D[i].marginBalanceYi;
             const want = (m0 === null || m1 === null) ? "-" : +(m1 - m0).toFixed(2);
