@@ -91,6 +91,8 @@ python3 fetch_stocks.py          # 預設抓 12 個月；--months 24 加深、--
 - 預設開啟 2330（`stock.html#2327` 可直接開其他股票）。
 - 集保股權分散在減資 / 分割當週會出現「1 人持有 100%」的佔位列，一律剔除。
 - `run.sh`、`update_data.sh` 在 `stocks.txt` 存在時自動一併更新；個股抓取失敗只記警告，不影響大盤資料。
+- `data/stocks/` 不進 git：在執行抓取的機器上產生，`./run.sh deploy` 直接從本機上傳。新 clone 須先跑一次
+  `python3 fetch_stocks.py`，頁面才有個股資料。
 
 ## 測試
 

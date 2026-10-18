@@ -3,6 +3,11 @@
 # re-runs finish in seconds.
 data/raw/
 
+# Per-stock outputs of fetch_stocks.py. Built and deployed from the machine
+# that runs the fetch (run.sh deploy uploads them from disk), so they never
+# need to be in git. Rebuild with `python3 fetch_stocks.py`.
+data/stocks/
+
 # Build artifacts of the fetcher
 fetch.log
 __pycache__/

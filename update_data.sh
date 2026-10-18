@@ -118,11 +118,10 @@ LATEST="$("$PYTHON" -c 'import json;d=json.load(open("data/taiex-daily.json"));p
 say "[$(date '+%F %T')] latest trading day ${LATEST% *} (${LATEST#* } rows)"
 
 if (( DO_COMMIT )); then
-  git add -N data/stocks 2>/dev/null || true
-  if git diff --quiet -- data/taiex-daily.json data/taiex-daily.js data/stocks; then
+  if git diff --quiet -- data/taiex-daily.json data/taiex-daily.js; then
     say "  data unchanged; nothing to commit"
   else
-    git add data/taiex-daily.json data/taiex-daily.js data/stocks
+    git add data/taiex-daily.json data/taiex-daily.js
     git commit -q -m "chore(data): refresh TAIEX daily dataset through ${LATEST% *}" \
       >>"$LOG" 2>&1 || fail "git commit failed"
     say "  committed refreshed data through ${LATEST% *}"
