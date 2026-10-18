@@ -18,7 +18,8 @@
 #                     Read from ./.env (gitignored) when present; not needed
 #                     where `wrangler login` has been run.
 #
-# Deploy uploads only the three files the page loads, staged into a temp dir:
+# Deploy uploads only the files the pages load (plus stock.html and
+# data/stocks/*.js once fetch_stocks.py has run), staged into a temp dir:
 # data/raw/, fetch.log, tests and notes never leave this machine. The project
 # is created on first deploy. Safe to call from cron via update_data.sh --deploy.
 
@@ -51,6 +52,12 @@ deploy() {
   for f in "${files[@]}"; do
     [[ -s "$f" ]] || { echo "run.sh deploy: missing $f (run python3 fetch_data.py)" >&2; exit 1; }
   done
+
+  # The single-stock page is optional: shipped only once fetch_stocks.py has
+  # built data for it.
+  if [[ -s data/stocks/index.js ]]; then
+    files+=(stock.html data/stocks/*.js)
+  fi
 
   STAGE="$(mktemp -d)"
   trap 'rm -rf "$STAGE"' EXIT
@@ -100,6 +107,10 @@ done
 if [[ "$DO_FETCH" -eq 1 ]]; then
   echo "Fetching TAIEX data (incremental; cached responses are reused)..."
   python3 fetch_data.py
+  if [[ -s stocks.txt ]]; then
+    echo "Fetching watchlist stocks (stocks.txt)..."
+    python3 fetch_stocks.py
+  fi
 fi
 
 echo "Serving dashboard at http://localhost:${PORT}"

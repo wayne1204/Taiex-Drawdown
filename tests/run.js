@@ -102,6 +102,8 @@ function runProcess(suiteName, cmd, args, opts = {}) {
     const py = path.join(TESTS_DIR, "fetch_test.py");
     runProcess("fetch_data.py — parsers & cache (python unittest)", "python3", [py],
       { missing: fs.existsSync(py) ? null : "tests/fetch_test.py not present" });
+    runProcess("fetch_stocks.py — parsers (python unittest)", "python3",
+      [path.join(TESTS_DIR, "stock_fetch_test.py")]);
   }
 
   // ── Data + acceptance criteria ───────────────────────────────────────────

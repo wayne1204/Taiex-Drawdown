@@ -94,6 +94,17 @@ if ! "$PYTHON" fetch_data.py "${START_ARGS[@]}" >>"$LOG" 2>&1; then
   fail "fetch_data.py exited non-zero"
 fi
 
+# The watchlist is optional; a failure here is reported but does not block the
+# market-level refresh and deploy below.
+if [[ -s stocks.txt ]]; then
+  if "$PYTHON" fetch_stocks.py >>"$LOG" 2>&1; then
+    say "  watchlist stocks refreshed"
+  else
+    say "  WARNING: fetch_stocks.py exited non-zero (see $LOG)"
+    echo "update_data.sh: fetch_stocks.py failed; market data still updated" >&2
+  fi
+fi
+
 if (( DO_BUNDLE )); then
   if ! "$PYTHON" bundle.py >>"$LOG" 2>&1; then
     fail "bundle.py exited non-zero"
@@ -107,10 +118,11 @@ LATEST="$("$PYTHON" -c 'import json;d=json.load(open("data/taiex-daily.json"));p
 say "[$(date '+%F %T')] latest trading day ${LATEST% *} (${LATEST#* } rows)"
 
 if (( DO_COMMIT )); then
-  if git diff --quiet -- data/taiex-daily.json data/taiex-daily.js; then
+  git add -N data/stocks 2>/dev/null || true
+  if git diff --quiet -- data/taiex-daily.json data/taiex-daily.js data/stocks; then
     say "  data unchanged; nothing to commit"
   else
-    git add data/taiex-daily.json data/taiex-daily.js
+    git add data/taiex-daily.json data/taiex-daily.js data/stocks
     git commit -q -m "chore(data): refresh TAIEX daily dataset through ${LATEST% *}" \
       >>"$LOG" 2>&1 || fail "git commit failed"
     say "  committed refreshed data through ${LATEST% *}"

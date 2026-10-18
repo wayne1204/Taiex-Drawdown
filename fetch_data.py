@@ -165,11 +165,15 @@ def is_stale(key, payload):
     return False
 
 
-def fetch(endpoint, path, params, key, rebuild_only=False):
+def fetch(endpoint, path, params, key, rebuild_only=False, slim=None):
     """
     Cached GET with exponential backoff. Returns a dict, or None when that
     day/month has no data. A cache hit issues no request at all - this is what
     makes the second run finish in seconds.
+
+    `slim`, when given, maps an OK payload to the (smaller) dict that is cached
+    and returned instead - for whole-market responses where only a few columns
+    are ever read back.
     """
     cp = _cache_path(endpoint, key)
     today = date.today()
@@ -214,6 +218,8 @@ def fetch(endpoint, path, params, key, rebuild_only=False):
                 # Non-trading day / no data - normal. Cache an empty marker so we
                 # never ask again.
                 payload = {"stat": stat, "_empty": True}
+            elif slim is not None:
+                payload = slim(payload)
             if re.fullmatch(r"\d{6}", key):
                 payload["_fetchedOn"] = today.isoformat()
             with open(cp, "w", encoding="utf-8") as f:
