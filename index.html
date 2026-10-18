@@ -318,6 +318,7 @@
           <button data-v="foreign" aria-pressed="true">外資</button>
           <button data-v="trust">投信</button>
           <button data-v="dealer">自營商</button>
+          <button data-v="total">合計</button>
         </div>
       </div>
       <div class="legend">
@@ -396,14 +397,28 @@
   // palette is validated for the hues already in use — a fourth and fifth
   // categorical colour would need re-validating for CVD separation. The
   // selector keeps it to one series, so no new hue is introduced at all.
+  // 合計 sums whichever desks reported that day, and is missing only when all
+  // three are — the same "no fake zeros" rule the single-desk series follow.
+  const net = k => r => r[k];
   const DESKS = {
-    foreign:{key:'foreignNetYi', label:'外資'},
-    trust:  {key:'trustNetYi',   label:'投信'},
-    dealer: {key:'dealerNetYi',  label:'自營商'}
+    foreign:{val:net('foreignNetYi'), label:'外資'},
+    trust:  {val:net('trustNetYi'),   label:'投信'},
+    dealer: {val:net('dealerNetYi'),  label:'自營商'},
+    total:  {val:r=>{
+      const vs = ['foreignNetYi','trustNetYi','dealerNetYi']
+        .map(k=>r[k]).filter(v=>v!==null&&v!==undefined);
+      return vs.length ? +vs.reduce((a,b)=>a+b,0).toFixed(2) : null;
+    }, label:'三大法人'}
   };
-  const deskFlow = () => rows.map(r=>gap(r[DESKS[desk].key]));
+  const deskFlow = () => rows.map(r=>gap(DESKS[desk].val(r)));
   let fgn = deskFlow();
   const mgn    = rows.map(r=>gap(r.marginBalanceYi));
+  // Day-on-day margin change. A missing day on either side leaves a gap rather
+  // than diffing across it.
+  const mgnChg = rows.map((r,i)=>{
+    const m0 = i>0 ? rows[i-1].marginBalanceYi : null, m1 = r.marginBalanceYi;
+    return (m0===null||m0===undefined||m1===null||m1===undefined) ? null : +(m1-m0).toFixed(2);
+  });
 
   // Cumulative foreign net, rebased to the start of whatever window is in view.
   // Anchoring it to 2021-01 would make the line inside a zoomed episode read as a
@@ -414,11 +429,11 @@
   // A missing day counts as no change, so the line stays continuous.
   let cumBase = 0;
   function buildCum(from){
-    const k = DESKS[desk].key;
+    const val = DESKS[desk].val;
     let s = 0;
     return rows.map((r, i) => {
       if(i < from) return '-';                 // outside the window: draw nothing
-      s += (r[k] || 0);
+      s += (val(r) || 0);
       return +s.toFixed(2);
     });
   }
@@ -477,9 +492,10 @@
   // of a 390px screen, and the full stack needs the page to scroll rather than
   // each panel being squashed.
   const NAMES = ['加權指數','成交金額（億元）','買賣超（億元）',
-                 '累計買賣超（億元）','融資餘額（億元）'];
+                 '累計買賣超（億元）','融資餘額（億元）','融資增減（億元）'];
   const CUM = 3;                 // computed title: desk name + rebase date
   const FLOW = 2;                // computed title: desk name
+  const MGN = 4, MGN_CHG = 5;
   const isNarrow = () => window.innerWidth <= 720;
 
   function layout(){
@@ -562,11 +578,7 @@
     const chg = i>0 && r.close!==null && rows[i-1].close!==null ? r.close-rows[i-1].close : null;
     const chgPct = (chg!==null && rows[i-1].close) ? chg/rows[i-1].close*100 : null;
     const chgColor = chg===null ? COLORS.ink2 : (chg>=0?COLORS.up:COLORS.down);
-    // Day-on-day margin change, shown in the same signed red/green form as the
-    // desk flows. A missing day on either side leaves it blank rather than
-    // diffing across the gap.
-    const m0 = i>0 ? rows[i-1].marginBalanceYi : null, m1 = r.marginBalanceYi;
-    const mChg = (m0===null||m0===undefined||m1===null||m1===undefined) ? null : m1-m0;
+    const mChg = mgnChg[i];
     const mChgColor = mChg===null ? null : (mChg>=0?COLORS.up:COLORS.down);
 
     // Which correction window this day falls in
@@ -585,7 +597,7 @@
       ${li('高 / 低', `${nf(r.high,2)} / ${nf(r.low,2)}`)}
       ${li('成交金額', yi(r.turnoverYi), COLORS.turnover)}
       ${Object.values(DESKS).map(dk=>{
-          const v = r[dk.key];
+          const v = dk.val(r);
           const c = v===null||v===undefined ? null : (v>=0?COLORS.up:COLORS.down);
           return li(dk.label + (DESKS[desk]===dk ? ' ●' : ''),
             v===null||v===undefined ? '—' : `<span style="color:${c}">${sgnYi(v,1)}</span>`, c);
@@ -694,10 +706,19 @@
             lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}},
           markArea: markAreaFor(episodes, false) },
 
-        { name:'融資餘額', type:'line', data:mgn, xAxisIndex:4, yAxisIndex:4,
+        { name:'融資餘額', type:'line', data:mgn, xAxisIndex:MGN, yAxisIndex:MGN,
           showSymbol:false, symbolSize:8, connectNulls:false,
           lineStyle:{width:2, color:COLORS.margin},
           areaStyle:{color:alpha(COLORS.margin,.10)},
+          markArea: markAreaFor(episodes, false) },
+
+        // Same red-up / green-down bars as the desk flows, so a margin build-up
+        // and a foreign sell-off read in one visual language.
+        { name:'融資增減', type:'bar', data:mgnChg.map(gap), xAxisIndex:MGN_CHG, yAxisIndex:MGN_CHG,
+          itemStyle:{ borderRadius:[2,2,0,0],
+            color:p => (p.value>=0 ? COLORS.up : COLORS.down) }, barMaxWidth:6,
+          markLine:{silent:true, symbol:'none', data:[{yAxis:0}],
+            lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}},
           markArea: markAreaFor(episodes, false) }
       ]
     };

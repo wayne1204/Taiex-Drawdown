@@ -210,10 +210,10 @@ module.exports = {
         t.ok("longest series path spans the plot area, not crammed at the left edge (>= 1200 of ~1304px)",
           span >= 1200, `longest path spans ${span.toFixed(0)}px`);
 
-        // ── 7. All five subplot titles are present ────────────────────────
+        // ── 7. All six subplot titles are present ─────────────────────────
         const labels = [...svg.querySelectorAll("text")].map(tn => tn.textContent);
         for (const want of ["加權指數", "成交金額（億元）", "外資買賣超（億元）",
-                            "融資餘額（億元）"]) {
+                            "融資餘額（億元）", "融資增減（億元）"]) {
           t.ok(`panel title "${want}" is rendered in the SVG`, labels.includes(want));
         }
         // This one carries the rebase date, so it is a prefix match by design.
@@ -320,8 +320,8 @@ module.exports = {
         const candles = (chart.getOption().series[0].data || []).filter(d => Array.isArray(d));
         t.ok("candlestick series carries OHLC array data for > 1300 sessions",
           candles.length > 1300, `${candles.length} candles`);
-        t.eq("all 5 series survive the chart-type toggle",
-          (chart.getOption().series || []).length, 5);
+        t.eq("all 6 series survive the chart-type toggle",
+          (chart.getOption().series || []).length, 6);
         t.ok("no errors after toggling chart type", errors.length === 0,
           errors.slice(0, 3).join(" || "));
 
@@ -438,6 +438,40 @@ module.exports = {
               `${cum[cum.length - 1]} vs ${want}`);
           }
 
+          // 合計 is the sum of the three desks, under the 三大法人 name.
+          {
+            const keys = ["foreignNetYi", "trustNetYi", "dealerNetYi"];
+            const dayTotal = r => {
+              const vs = keys.map(k => r[k]).filter(v => v !== null && v !== undefined);
+              return vs.length ? +vs.reduce((a, b) => a + b, 0).toFixed(2) : null;
+            };
+            pick("total");
+            const s = flowSeries();
+            const lastTotal = dayTotal(D[D.length - 1]);
+            t.ok("合計: series, both panel titles and the data switch to 三大法人",
+              s.name === "三大法人買賣超" &&
+              titleAt(2).startsWith("三大法人") && titleAt(3).startsWith("三大法人") &&
+              s.data[D.length - 1] === (lastTotal === null ? "-" : lastTotal),
+              `${s.name} | ${titleAt(2)} | last ${s.data[D.length - 1]} vs ${lastTotal}`);
+            const cum = (chart.getOption().series || [])[3].data;
+            const want = +D.reduce((a, r) => a + (dayTotal(r) || 0), 0).toFixed(2);
+            t.ok("合計: cumulative line sums all three desks",
+              Math.abs(cum[cum.length - 1] - want) < 0.05,
+              `${cum[cum.length - 1]} vs ${want}`);
+            pick("foreign");
+          }
+
+          // 融資增減 bars are the day-on-day change of 融資餘額.
+          {
+            const bars = (chart.getOption().series || [])[5];
+            const i = D.length - 1;
+            const m0 = D[i - 1].marginBalanceYi, m1 = D[i].marginBalanceYi;
+            const want = (m0 === null || m1 === null) ? "-" : +(m1 - m0).toFixed(2);
+            t.ok("融資增減: bar series holds the day-on-day margin change",
+              bars && bars.name === "融資增減" && bars.type === "bar" && bars.data[i] === want,
+              `${bars && bars.name} last ${bars && bars.data[i]} vs ${want}`);
+          }
+
           t.ok("switching desk does not disturb the episode table",
             doc.querySelectorAll("#tbody tr").length > 0,
             `${doc.querySelectorAll("#tbody tr").length} rows`);
@@ -546,7 +580,7 @@ module.exports = {
         const g = optOf().grid;
         t.ok("narrow: y-axis gutter shrinks", g[0].left < wideLeft,
           `${wideLeft}px → ${g[0].left}px`);
-        t.eq("narrow: still five panels", g.length, 5);
+        t.eq("narrow: still six panels", g.length, 6);
         t.ok("narrow: panels remain vertically disjoint",
           g.every((x, i) => i === 0 || x.top >= g[i - 1].top + g[i - 1].height),
           g.map(x => `${x.top}+${x.height}`).join(" "));
@@ -554,8 +588,8 @@ module.exports = {
           parseInt(doc.getElementById("chart").style.height, 10) > 0,
           doc.getElementById("chart").style.height);
         t.ok("narrow: x labels drop the century to fit",
-          optOf().xAxis[4].axisLabel.formatter("2026-07-29") === "26/07",
-          optOf().xAxis[4].axisLabel.formatter("2026-07-29"));
+          optOf().xAxis[5].axisLabel.formatter("2026-07-29") === "26/07",
+          optOf().xAxis[5].axisLabel.formatter("2026-07-29"));
         t.ok("narrow: touch panning is disabled so the page can scroll",
           optOf().dataZoom[0].moveOnMouseMove === false,
           `moveOnMouseMove=${optOf().dataZoom[0].moveOnMouseMove}`);
