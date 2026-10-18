@@ -306,6 +306,50 @@ module.exports = {
           spanOf(restored) > spanOf(full) * 0.9,
           `span back to ${spanOf(restored).toFixed(0)}`);
 
+        // ── Episode stepper + summary bar ─────────────────────────────────
+        // Walking episodes from the chart must keep the table, zoom and summary
+        // on the same episode, or the numbers beside the chart describe one wave
+        // while the panels show another.
+        {
+          const $ = id => doc.getElementById(id);
+          const selIdx = () => {
+            const r = doc.querySelector('#tbody tr[aria-selected="true"]');
+            return r ? +r.dataset.i : -1;
+          };
+          t.ok("summary bar is hidden with nothing selected", $("ep-sum").hidden);
+          $("ep-next").click();
+          t.eq("› from the full view selects the first episode", selIdx(), 0);
+          t.ok("summary bar names the episode's peak and trough dates",
+            !$("ep-sum").hidden && $("ep-sum").textContent.includes(EPS[0].peakDate.replace(/-/g, "/"))
+              && $("ep-sum").textContent.includes(EPS[0].troughDate.replace(/-/g, "/")),
+            $("ep-sum").textContent.slice(0, 60));
+          t.ok("‹ is disabled on the first episode", $("ep-prev").disabled);
+          $("ep-next").click();
+          t.eq("› steps to the next episode", selIdx(), 1);
+          const z = zoomOf(chart);
+          t.ok("stepping re-zooms onto the new episode",
+            z.s <= EPS[1].peakIdx && z.e >= EPS[1].troughIdx, `[${z.s}, ${z.e}]`);
+          $("ep-clear").click();
+          t.eq("顯示全部 clears the selection", selIdx(), -1);
+          t.ok("顯示全部 restores the full x-range", spanOf(zoomOf(chart)) > spanOf(full) * 0.9);
+          $("ep-prev").click();
+          t.eq("‹ from the full view selects the latest episode", selIdx(), EPS.length - 1);
+          $("ep-clear").click();
+        }
+
+        // Each bar panel's bands must sit on the same dates as the index's —
+        // a markArea hosted on a bar series drifts once dataZoom filters it.
+        {
+          const ser = chart.getOption().series;
+          const hosts = ser.filter(s => s.type === "line" && !(s.data || []).length && s.markArea);
+          t.eq("three band hosts, one per bar panel", hosts.length, 3);
+          t.ok("bar series carry no markArea of their own",
+            ser.filter(s => s.type === "bar").every(s => !s.markArea || !(s.markArea.data || []).length));
+          t.ok("band hosts mark the same episodes as the index panel",
+            hosts.every(h => JSON.stringify(h.markArea.data.map(d => [d[0].xAxis, d[1].xAxis])) ===
+              JSON.stringify(ser[0].markArea.data.map(d => [d[0].xAxis, d[1].xAxis]))));
+        }
+
         // ── 9. Chart-type toggle ──────────────────────────────────────────
         const typeOfMain = () => (chart.getOption().series || [])[0].type;
         t.eq("main series starts as candlesticks (K 線 is the default)", typeOfMain(), "candlestick");
@@ -320,8 +364,9 @@ module.exports = {
         const candles = (chart.getOption().series[0].data || []).filter(d => Array.isArray(d));
         t.ok("candlestick series carries OHLC array data for > 1300 sessions",
           candles.length > 1300, `${candles.length} candles`);
-        t.eq("all 6 series survive the chart-type toggle",
-          (chart.getOption().series || []).length, 6);
+        // 6 data series + 3 empty line series hosting the bar panels' bands
+        t.eq("all 9 series survive the chart-type toggle",
+          (chart.getOption().series || []).length, 9);
         t.ok("no errors after toggling chart type", errors.length === 0,
           errors.slice(0, 3).join(" || "));
 

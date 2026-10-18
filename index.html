@@ -84,6 +84,14 @@
   /* .seg's own background matches the panel, so lift it off with the page color */
   .panel-head .seg{background:var(--bg)}
   #chart{width:100%;height:900px}
+  .btn-sm{padding:3px 10px;font-size:13px;line-height:1.3}
+  .ep-nav{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .ep-nav h2{margin-right:6px}
+  .ep-label{color:var(--ink-2);font-size:12.5px;min-width:9.5em;text-align:center}
+  .ep-sum{display:flex;flex-wrap:wrap;gap:4px 18px;margin:0 10px 6px;padding:8px 12px;
+    background:var(--bg);border:1px solid var(--line);border-radius:7px;font-size:12.5px}
+  .ep-sum span{white-space:nowrap}
+  .ep-sum b{color:var(--ink-3);font-weight:400;margin-right:5px}
   .panel-tools{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
   .date-pick{display:inline-flex;align-items:center;gap:7px;color:var(--ink-3);font-size:12px}
   .date-pick input{background:var(--bg);color:var(--ink);border:1px solid var(--line);
@@ -266,7 +274,7 @@
 
     <div class="table-head">
       <h2>修正波段明細</h2>
-      <span class="hint"><span class="desktop-only">點欄位標題排序 · </span>點任一列將下方圖表縮放至該區間前後 40 個交易日 · 再點一次取消</span>
+      <span class="hint"><span class="desktop-only">點欄位標題排序 · </span>點任一列將圖表縮放至該區間前後 40 個交易日 · 再點一次取消</span>
     </div>
     <div class="sortbar">
       <select id="sort-field" aria-label="排序欄位"></select>
@@ -283,24 +291,13 @@
 
     <div class="panel">
       <div class="panel-head">
-        <h2>波段疊圖</h2>
-        <div class="seg" id="seg-ov" role="group" aria-label="疊圖對齊方式">
-          <button data-v="peak" aria-pressed="true">對齊高點</button>
-          <button data-v="trough">對齊谷底</button>
+        <div class="ep-nav" role="group" aria-label="切換修正波段">
+          <h2>加權指數</h2>
+          <button class="btn btn-sm" id="ep-prev" aria-label="上一波">‹</button>
+          <span class="ep-label num" id="ep-label" aria-live="polite">全部期間</span>
+          <button class="btn btn-sm" id="ep-next" aria-label="下一波">›</button>
+          <button class="btn btn-sm" id="ep-clear" hidden>顯示全部</button>
         </div>
-      </div>
-      <div id="overlay"></div>
-      <div class="legend">
-        <span><i class="dot" style="background:var(--ink-4)"></i>已收復波段</span>
-        <span><i class="dot" style="background:var(--c-cum)"></i>進行中</span>
-        <span><i class="dot" style="background:var(--c-turnover)"></i>表格選取中</span>
-        <span class="ctx-sub">游標移到線上可看是哪一波，點擊可在表格中定位</span>
-      </div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-head">
-        <h2>加權指數</h2>
         <div class="panel-tools">
           <label class="date-pick">起始日
             <input type="date" id="zoom-start" aria-label="圖表起始日"></label>
@@ -310,6 +307,8 @@
           </div>
         </div>
       </div>
+      <!-- The selected episode's table row, restated beside the chart it zooms. -->
+      <div class="ep-sum num" id="ep-sum" hidden></div>
       <!-- The 法人 control floats over the flow panels it switches, positioned
            by renderChart() on that panel's title row. -->
       <div class="chart-wrap">
@@ -332,6 +331,23 @@
       </div>
     </div>
 
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>波段疊圖</h2>
+        <div class="seg" id="seg-ov" role="group" aria-label="疊圖對齊方式">
+          <button data-v="peak" aria-pressed="true">對齊高點</button>
+          <button data-v="trough">對齊谷底</button>
+        </div>
+      </div>
+      <div id="overlay"></div>
+      <div class="legend">
+        <span><i class="dot" style="background:var(--ink-4)"></i>已收復波段</span>
+        <span><i class="dot" style="background:var(--c-cum)"></i>進行中</span>
+        <span><i class="dot" style="background:var(--c-turnover)"></i>表格選取中</span>
+        <span class="ctx-sub">游標移到線上可看是哪一波，點擊可將上方圖表縮放至該波</span>
+      </div>
+    </div>
 
     <footer>
       <p><strong>融資殺盤幅度</strong> = 區間融資餘額減幅(%) ÷ 指數跌幅(%)。比值愈高代表散戶去槓桿愈徹底，
@@ -488,9 +504,11 @@
   // foreign net live in separate panels rather than sharing one plot with two
   // y-scales — a dual-axis chart makes the crossings look meaningful when they
   // are an artifact of the scaling.
-  // Phones get the same panels, just tighter: a 70px y-axis gutter eats a fifth
-  // of a 390px screen, and the full stack needs the page to scroll rather than
-  // each panel being squashed.
+  // On desktop the whole stack is sized to the window, so an episode's price,
+  // turnover, flows and margin can be read in one screen without scrolling
+  // between them. Phones get the same panels, just tighter: a 70px y-axis gutter
+  // eats a fifth of a 390px screen, and the full stack needs the page to scroll
+  // rather than each panel being squashed.
   const NAMES = ['加權指數','成交金額（億元）','買賣超（億元）',
                  '累計買賣超（億元）','融資餘額（億元）','融資增減（億元）'];
   const CUM = 3;                 // computed title: desk name + rebase date
@@ -500,10 +518,21 @@
 
   function layout(){
     const narrow = isNarrow();
-    const mainH  = narrow ? 190 : 250;
-    const subH   = narrow ? 70  : 88;
-    const gap    = narrow ? 40  : 42;      // room for each panel's title
-    const top0   = narrow ? 28  : 34;
+    const gap    = narrow ? 40  : 30;      // room for each panel's title
+    const top0   = narrow ? 28  : 26;
+    const foot   = narrow ? 34  : 44;      // room for the zoom slider
+    let mainH = 190, subH = 70;
+    if(!narrow){
+      // Panel head, summary bar and legend take ~150px of the window. Solve
+      // top0 + main + 5*(sub+gap) + foot = avail with main = 2.8*sub, clamped
+      // so a short window still gets readable panels and a tall one stops
+      // growing at the old fixed size.
+      const avail = window.innerHeight - 150;
+      const subs = NAMES.length - 1;
+      subH  = Math.max(58, Math.min(88,
+                Math.floor((avail - top0 - foot - subs*gap) / (subs + 2.8))));
+      mainH = Math.min(250, Math.round(subH * 2.8));
+    }
     const grids = [];
     let top = top0;
     for(let i=0;i<NAMES.length;i++){
@@ -515,7 +544,7 @@
       grids, narrow,
       left:  narrow ? 46 : 70,
       right: narrow ? 12 : 26,
-      totalH: top + (narrow ? 34 : 44)     // leave room for the zoom slider
+      totalH: top + foot
     };
   }
   let L = layout();
@@ -536,13 +565,18 @@
   });
   const valCommon = i => ({
     type:'value', gridIndex:i, scale:i===0,
+    // The sub-panels are 60-90px tall: three ticks, not a stack of seven
+    splitNumber: i===0 ? 5 : 3,
     axisLine:{show:false}, axisTick:{show:false},
     splitLine:{lineStyle:{color:COLORS.line2}},
     axisLabel:{color:COLORS.ink3, fontSize:L.narrow?9:11,
       // 46px of gutter cannot hold "45,000"; abbreviate hard on narrow screens
       formatter:v=>{
         const a = Math.abs(v);
-        if(a>=10000) return (v/10000).toFixed(L.narrow?0:1)+'萬';
+        // Enough decimals that neighbouring ticks never print the same label
+        // (16,000 and 16,500 both rounding to "1.6萬")
+        if(a>=10000) return (v/10000).toFixed(
+          v%10000===0 ? 0 : v%1000===0 ? 1 : 2)+'萬';
         if(L.narrow && a>=1000) return (v/1000).toFixed(0)+'k';
         return nf(v,0);
       }}
@@ -651,7 +685,7 @@
       animation:false,
       textStyle:{fontFamily:'Inter, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif'},
       title: L.grids.map((g,i)=>({
-        text: i===CUM ? cumTitle() : i===FLOW ? deskName()+g.name : g.name, left:L.narrow?8:14, top:g.top-19,
+        text: i===CUM ? cumTitle() : i===FLOW ? deskName()+g.name : g.name, left:L.narrow?8:L.left+4, top:g.top-(L.narrow?19:17),
         textStyle:{color:COLORS.ink3, fontSize:L.narrow?10:11.5, fontWeight:500}
       })),
       grid: L.grids.map(g=>({left:L.left, right:L.right, top:g.top, height:g.height})),
@@ -689,15 +723,13 @@
         mainSeries(),
 
         { name:'成交金額', type:'bar', data:turn, xAxisIndex:1, yAxisIndex:1,
-          itemStyle:{color:COLORS.turnover, borderRadius:[2,2,0,0]}, barMaxWidth:6,
-          markArea: markAreaFor(episodes, false) },
+          itemStyle:{color:COLORS.turnover, borderRadius:[2,2,0,0]}, barMaxWidth:6 },
 
         { name:deskName()+'買賣超', type:'bar', data:fgn, xAxisIndex:FLOW, yAxisIndex:FLOW,
           itemStyle:{ borderRadius:[2,2,0,0],
             color:p => (p.value>=0 ? COLORS.up : COLORS.down) }, barMaxWidth:6,
           markLine:{silent:true, symbol:'none', data:[{yAxis:0}],
-            lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}},
-          markArea: markAreaFor(episodes, false) },
+            lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}} },
 
         { name:deskName()+'累計買賣超', type:'line', data:cumView, xAxisIndex:CUM, yAxisIndex:CUM,
           showSymbol:false, symbolSize:8, lineStyle:{width:2, color:COLORS.cum},
@@ -718,8 +750,14 @@
           itemStyle:{ borderRadius:[2,2,0,0],
             color:p => (p.value>=0 ? COLORS.up : COLORS.down) }, barMaxWidth:6,
           markLine:{silent:true, symbol:'none', data:[{yAxis:0}],
-            lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}},
-          markArea: markAreaFor(episodes, false) }
+            lineStyle:{color:COLORS.ink4, width:1}, label:{show:false}} },
+
+        // ECharts mis-places a markArea hosted on a bar series once dataZoom
+        // filters the data: the bands drift by days to weeks against the
+        // index panel. Hang the bar panels' bands on empty line series instead,
+        // which resolve dates through the axis the same way the index does.
+        ...[1, FLOW, MGN_CHG].map(i=>({ type:'line', data:[], silent:true,
+          xAxisIndex:i, yAxisIndex:i, markArea: markAreaFor(episodes, false) }))
       ]
     };
     chart.setOption(opt, {notMerge:true});
@@ -729,12 +767,46 @@
     deskSeg.style.top   = (L.grids[FLOW].top - 30) + 'px';
     deskSeg.style.right = L.right + 'px';
     syncStartInput();
+    renderEpisodeNav();
 
     // Keep the legend swatch honest: in candlestick mode the index is drawn in
     // the red/green up-down pair, not the neutral line colour.
     document.getElementById('lg-index').style.background = chartType === 'candle'
       ? `linear-gradient(135deg, ${COLORS.up} 50%, ${COLORS.down} 50%)`
       : COLORS.index;
+  }
+
+  // ── Episode stepper + summary ─────────────────────────────
+  // The table sits above the chart, so comparing episodes used to mean scrolling
+  // back up for every click. The stepper walks the episodes in time order from
+  // the chart itself, and the summary bar restates the table row's numbers next
+  // to the panels they describe.
+  function renderEpisodeNav(){
+    const e = episodes[selected];
+    document.getElementById('ep-label').textContent = e
+      ? `#${selected+1} / ${episodes.length} · ${fd(e.peakDate)}`
+      : `全部期間 · ${episodes.length} 波`;
+    document.getElementById('ep-prev').disabled = !episodes.length || selected === 0;
+    document.getElementById('ep-next').disabled = !episodes.length || selected === episodes.length-1;
+    document.getElementById('ep-clear').hidden = !e;
+
+    const box = document.getElementById('ep-sum');
+    box.hidden = !e;
+    if(!e){ box.innerHTML = ''; return; }
+    const cls = v => v===null||v===undefined ? '' : v>=0 ? 'pos' : 'neg';
+    const item = (k, v, c='') => `<span><b>${k}</b><span class="${c}">${v}</span></span>`;
+    const pct = (v,d) => v===null||v===undefined ? '—' : sgn(v,d)+'%';
+    box.innerHTML = [
+      item('高點 → 谷底', `${fd(e.peakDate)} → ${fd(e.troughDate)}`),
+      item('跌幅', e.drawdownPct.toFixed(2)+'%', 'neg'),
+      item('下跌', nf(e.declineDays,0)+' 日'),
+      item('收復', e.recoveryDays===null ? '進行中' : nf(e.recoveryDays,0)+' 日'),
+      item('量能變化', pct(e.turnoverChgPct,1), cls(e.turnoverChgPct)),
+      item('外資累計', sgnYi(e.foreignSumYi,0), cls(e.foreignSumYi)),
+      item('融資變化', e.marginChgYi===null||e.marginChgYi===undefined ? '—'
+        : `${sgnYi(e.marginChgYi,0)} (${pct(e.marginChgPct,1)})`, cls(e.marginChgYi)),
+      item('融資殺盤幅度', e.killRatio===null||e.killRatio===undefined ? '—' : nf(e.killRatio,2))
+    ].join('');
   }
 
   // ── Episode overlay ───────────────────────────────────────
@@ -1033,23 +1105,45 @@
     renderChart(); renderOverlay(); renderTable();
   }
 
-  // Clicking a path in the overlay selects the same episode as its table row,
-  // then brings that row into view: the table sits above the overlay, so
-  // without the scroll the selection would happen off-screen.
+  // Selecting from the table or the overlay zooms the chart, so bring the chart
+  // panel to the top of the window — otherwise the zoom happens off-screen.
+  // Skipped when the panel's top is already in view, so stepping through
+  // episodes from the chart itself never jolts the page.
+  const chartPanel = document.getElementById('chart').closest('.panel');
+  function revealChart(){
+    if(selected < 0) return;
+    const top = chartPanel.getBoundingClientRect().top;
+    if(top < 0 || top > window.innerHeight * 0.25)
+      chartPanel.scrollIntoView({block: 'start', behavior: 'smooth'});
+  }
+
+  // Clicking a path in the overlay selects the same episode as its table row.
   overlay.on('click', p=>{
     if(p.componentType !== 'series' || p.seriesIndex >= episodes.length) return;
     select(p.seriesIndex);
-    if(selected < 0) return;
+    revealChart();
+    // Focus follows the selection to its row, without scrolling away from the
+    // chart, so the arrow keys carry on from the episode just picked.
     const tr = document.querySelector(`#tbody tr[data-i="${selected}"]`);
-    if(tr){
-      tr.scrollIntoView({block: 'center', behavior: 'smooth'});
-      tr.focus({preventScroll: true});
-    }
+    if(tr) tr.focus({preventScroll: true});
   });
 
   document.getElementById('tbody').addEventListener('click', ev=>{
     const tr = ev.target.closest('tr'); if(!tr) return;
     select(+tr.dataset.i);
+    revealChart();
+  });
+
+  const step = d => {
+    if(!episodes.length) return;
+    const i = selected < 0 ? (d > 0 ? 0 : episodes.length-1) : selected + d;
+    if(i >= 0 && i < episodes.length && i !== selected) select(i);
+  };
+  document.getElementById('ep-prev').addEventListener('click', ()=>step(-1));
+  document.getElementById('ep-next').addEventListener('click', ()=>step(1));
+  document.getElementById('ep-clear').addEventListener('click', ()=>{
+    if(selected >= 0) select(selected);
+    document.getElementById('ep-next').focus();   // the clicked button just hid
   });
 
   // Keyboard equivalent of the row click, plus arrow-key movement between rows
@@ -1060,7 +1154,9 @@
     if(ev.key === 'Enter' || ev.key === ' '){
       ev.preventDefault();                     // Space would scroll the page
       select(i);
-      refocus(`#tbody tr[data-i="${i}"]`);
+      revealChart();
+      const tr = document.querySelector(`#tbody tr[data-i="${i}"]`);
+      if(tr) tr.focus({preventScroll: true});   // keep the chart in view
       return;
     }
     const step = ev.key === 'ArrowDown' ? 1 : ev.key === 'ArrowUp' ? -1 : 0;
@@ -1233,13 +1329,16 @@
 
   // Crossing the mobile breakpoint changes grid geometry, axis fonts and label
   // formats, so it needs a full re-render — a bare resize() would keep the old
-  // desktop margins on a phone. Debounced because rotation fires a burst.
+  // desktop margins on a phone. On desktop the panel heights follow the window
+  // height, so a change there rebuilds too. Debounced because rotation fires a
+  // burst.
   let wasNarrow = isNarrow(), rzTimer = null;
   window.addEventListener('resize', ()=>{
     clearTimeout(rzTimer);
     rzTimer = setTimeout(()=>{
       const now = isNarrow();
       if(now !== wasNarrow){ wasNarrow = now; renderChart(); renderOverlay(); }
+      else if(layout().totalH !== L.totalH){ renderChart(); overlay.resize(); }
       else { chart.resize(); overlay.resize(); }
     }, 150);
   });
