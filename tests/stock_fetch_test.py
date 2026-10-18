@@ -70,15 +70,37 @@ class TestMargin(Base):
         self.assertEqual(fs.slim_margin(payload)["rows"], {"2327": [51866, 51740]})
 
 
-class TestStockDay(Base):
-    def test_parse(self):
-        name, rows = fs.parse_stock_day({
-            "stat": "OK", "title": "115年10月 2327 國巨*            各日成交資訊",
-            "data": [["115/10/16", "36,288,000", "1", "581.00", "595.00", "567.00", "567.00",
-                      "-6.00", "1", ""]]})
-        self.assertEqual(name, "國巨*")
-        self.assertEqual(rows["2026-10-16"],
-                         {"open": 581, "high": 595, "low": 567, "close": 567, "volume": 36288})
+class TestQuotes(Base):
+    def test_quote_table_found_by_header(self):
+        payload = {"tables": [
+            {"fields": ["指數", "收盤指數"], "data": [["發行量加權股價指數", "40,000"]]},
+            {"fields": ["證券代號", "證券名稱", "成交股數", "成交筆數", "成交金額", "開盤價",
+                        "最高價", "最低價", "收盤價", "漲跌(+/-)"],
+             "data": [["2330", "台積電", "43,046,982", "1", "1", "2,430.00", "2,445.00",
+                       "2,420.00", "2,420.00", "<p>-</p>"],
+                      ["9999", "停牌股", "0", "0", "0", "--", "--", "--", "--", ""]]},
+        ]}
+        out = fs.slim_quotes(payload)
+        self.assertEqual(out["rows"]["2330"], [2430, 2445, 2420, 2420, 43047])
+        self.assertEqual(out["names"]["2330"], "台積電")
+        # No trade: prices are gaps, not zeros
+        self.assertEqual(out["rows"]["9999"][:4], [None, None, None, None])
+
+    def test_universe(self):
+        ok = ["2330", "0050", "00878", "00632R"]
+        no = ["2881A", "01001T", "020000", "910322", "1101B"]
+        self.assertTrue(all(fs.UNIVERSE_RE.fullmatch(c) for c in ok))
+        self.assertFalse(any(fs.UNIVERSE_RE.fullmatch(c) for c in no))
+
+
+class TestHoldersFreshness(Base):
+    def test_weekly_after_saturday(self):
+        from datetime import date
+        f = lambda d: fs.holders_fresh_since(date.fromisoformat(d))  # noqa: E731
+        self.assertEqual(f("2026-10-17"), "2026-10-17")   # Saturday itself
+        self.assertEqual(f("2026-10-19"), "2026-10-17")   # Monday
+        self.assertEqual(f("2026-10-23"), "2026-10-17")   # Friday
+        self.assertEqual(f("2026-10-24"), "2026-10-24")
 
 
 class TestHolders(Base):

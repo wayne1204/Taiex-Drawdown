@@ -99,6 +99,17 @@
   .chart-wrap{position:relative}
   .chart-float{position:absolute;z-index:2;background:var(--bg)}
   .seg-sm button{padding:2px 9px;font-size:12px}
+  .search{position:relative}
+  .search input{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:7px;
+    padding:6px 10px;font:inherit;font-size:13px;width:16em}
+  .search input:focus{outline:none;border-color:var(--ink-3)}
+  .search-msg{position:absolute;left:0;top:100%;margin-top:4px;font-size:11.5px;color:var(--c-up);
+    white-space:nowrap;z-index:3}
+  .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:-8px 0 16px;font-size:12px;color:var(--ink-3)}
+  .chips button{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
+    border-radius:99px;padding:3px 11px;font:inherit;font-size:12.5px;cursor:pointer}
+  .chips button:hover{color:var(--ink);border-color:var(--ink-4)}
+  .chips button[aria-pressed="true"]{color:var(--ink);background:var(--surface-2);border-color:var(--ink-3)}
   select{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:7px;
     padding:6px 10px;font:inherit;font-size:13px;min-width:12em}
 
@@ -169,8 +180,13 @@
     </div>
     <div class="controls">
       <div>
-        <label class="ctrl-label" for="pick">個股</label>
-        <select id="pick"></select>
+        <label class="ctrl-label" for="q">個股</label>
+        <div class="search">
+          <input id="q" type="search" list="stock-options" autocomplete="off" spellcheck="false"
+                 placeholder="代號或名稱，如 2330 / 台積電" aria-describedby="q-msg">
+          <datalist id="stock-options"></datalist>
+          <div class="search-msg" id="q-msg" role="status" aria-live="polite"></div>
+        </div>
       </div>
       <div>
         <label class="ctrl-label" for="d-pick">日期</label>
@@ -197,6 +213,9 @@
       </div>
     </div>
   </header>
+
+  <!-- The watchlist (stocks.txt), one click each; these also carry broker data. -->
+  <div class="chips" id="chips" hidden></div>
 
   <div id="app" hidden>
     <div class="kpis num" id="kpis"></div>
@@ -319,8 +338,50 @@
   const INST = {foreign:'外資', trust:'投信', dealer:'自營商', total:'合計'};
   const DEFAULT_CODE = '2330';
 
-  const pick = document.getElementById('pick');
-  pick.innerHTML = LIST.map(s=>`<option value="${s.code}">${s.code} ${s.name||''}</option>`).join('');
+  // ── Stock search ──────────────────────────────────────────
+  // Every built stock is searchable by code or name; the datalist gives the
+  // browser's own suggestion dropdown. Watchlist stocks are also chips.
+  const q = document.getElementById('q'), qMsg = document.getElementById('q-msg');
+  const label = s => `${s.code} ${s.name||''}`.trim();
+  document.getElementById('stock-options').innerHTML =
+    LIST.map(s=>`<option value="${label(s)}"></option>`).join('');
+  const tracked = LIST.filter(s=>s.tracked);
+  const chips = document.getElementById('chips');
+  if(tracked.length){
+    chips.hidden = false;
+    chips.innerHTML = '追蹤清單' + tracked.map(s=>
+      `<button data-code="${s.code}" aria-pressed="false">${label(s)}</button>`).join('');
+    chips.addEventListener('click', e=>{
+      const b = e.target.closest('button'); if(b) pickStock(b.dataset.code);
+    });
+  }
+  // "2330", "2330 台積電", "台積電", "台積" all resolve; codes win over names.
+  function resolve(text){
+    const t = text.trim().toUpperCase();
+    if(!t) return null;
+    const first = t.split(/\s+/)[0];
+    return LIST.find(s=>s.code===first)
+      || LIST.find(s=>(s.name||'').toUpperCase()===t)
+      || LIST.find(s=>s.code.startsWith(first))
+      || LIST.find(s=>(s.name||'').toUpperCase().includes(t))
+      || null;
+  }
+  // Only an explicit pick goes into the URL, so a plain visit always opens on
+  // the default stock rather than whichever one was last looked at.
+  function pickStock(code){
+    qMsg.textContent = '';
+    history.replaceState(null, '', '#'+code);
+    show(code);
+  }
+  function submitSearch(){
+    const hit = resolve(q.value);
+    if(hit){ pickStock(hit.code); q.blur(); }
+    else if(q.value.trim()) qMsg.textContent = `找不到「${q.value.trim()}」（僅上市股票與 ETF）`;
+  }
+  q.addEventListener('change', submitSearch);
+  q.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); submitSearch(); } });
+  q.addEventListener('focus', ()=>q.select());
+  q.addEventListener('input', ()=>{ qMsg.textContent = ''; });
 
   // Each stock is its own <script>, injected on demand: works over file://,
   // where fetch() of a local JSON file is blocked.
@@ -512,7 +573,8 @@
     chart.setOption({
       backgroundColor:'transparent', animation:false,
       textStyle:{fontFamily:'Inter, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif'},
-      title: L.grids.map((g,i)=>({text: i===P.INST ? instTitle() : g.name, left:L.narrow?8:L.left+4, top:g.top-(L.narrow?19:17),
+      title: L.grids.map((g,i)=>({text: i===P.INST ? instTitle()
+          : i===P.MAIN && !S.stock.tracked ? g.name + ' · 僅追蹤清單' : g.name, left:L.narrow?8:L.left+4, top:g.top-(L.narrow?19:17),
         textStyle:{color:COLORS.ink3, fontSize:L.narrow?10:11.5, fontWeight:500}})),
       grid: L.grids.map(g=>({left:L.left, right:L.right, top:g.top, height:g.height})),
       xAxis: all.map(i=>({
@@ -599,6 +661,12 @@
     });
     const b = brokersFor();
     const box = document.getElementById('brokers'), sum = document.getElementById('br-sum');
+    if(!S.stock.tracked && !b){
+      sum.innerHTML = '<span class="muted">主力進出與券商分點只提供追蹤清單中的股票：把代號加入 ' +
+        '<code>stocks.txt</code> 後執行 <code>python3 fetch_stocks.py</code>。</span>';
+      box.innerHTML = '';
+      return;
+    }
     if(!b){
       sum.innerHTML = period !== '1' && !isLatest()
         ? `<span class="muted">近 ${period} 日統計只提供最新交易日；${fd(S.dates[sel])} 請看近 1 日</span>`
@@ -629,7 +697,9 @@
     return loadStock(code).then(stock=>{
       S = { stock, ...derive(stock) };
       if(!S.rows.length) throw new Error('empty');
-      pick.value = code;
+      const entry = LIST.find(s=>s.code===code);
+      q.value = label(entry || stock);
+      chips.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b.dataset.code===code ? 'true' : 'false'));
       document.getElementById('title').textContent = `${stock.code} ${stock.name}`;
       document.title = `${stock.code} ${stock.name} · 個股籌碼監控`;
       document.getElementById('meta').textContent =
@@ -638,6 +708,12 @@
       syncDate();
       renderKpis(); renderChart(); renderBrokers();
     }).catch(()=>{
+      // A bad pick while a stock is on screen is a message, not a dead page.
+      if(S){
+        qMsg.textContent = `${code} 的資料載入失敗`;
+        q.value = label(S.stock);
+        return;
+      }
       showError(`<strong>${code} 的資料載入失敗。</strong><br>請執行 <code>python3 fetch_stocks.py</code>，` +
         `確認 <code>data/stocks/${code}.js</code> 已產生。`);
     });
@@ -653,9 +729,7 @@
   }
   seg('seg-range', v=>{ range = +v; if(S) chart.dispatchAction({type:'dataZoom', ...zoomOpt()}); });
   seg('seg-period', v=>{ period = v; if(S) renderBrokers(); });
-  // Only an explicit pick goes into the URL, so a plain visit always opens on
-  // the default stock rather than whichever one was last looked at.
-  pick.addEventListener('change', ()=>{ history.replaceState(null, '', '#'+pick.value); show(pick.value); });
+
 
   // ── Date ──────────────────────────────────────────────────
   const dPick = document.getElementById('d-pick');
