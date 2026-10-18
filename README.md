@@ -1,10 +1,12 @@
 # TAIEX Drawdown Atlas · 台股大盤修正波段分析
 
-自 2017 年以來加權指數的每一次修正波段，用峰谷法偵測出來，再疊上三個真正有意義的
-籌碼指標：成交金額、外資買賣超、融資餘額。
+**線上版：<https://tw-stock-drawdown.pages.dev>**
 
-資料全部來自臺灣證券交易所公開 endpoint，免金鑰、免付費。**不使用任何模擬資料**：
-抓不到就明確報錯，網頁也拒絕渲染，而不是拿假資料充數。
+自 2017 年以來加權指數的每一次修正波段（峰谷法偵測），疊上成交金額、三大法人買賣超與
+融資餘額。資料全部來自臺灣證券交易所公開 endpoint；**不使用任何模擬資料**，抓不到就報錯、
+網頁拒絕渲染。
+
+![儀表板截圖](docs/screenshot.png)
 
 ```
 fetch_data.py   →   data/taiex-daily.{json,js}   →   index.html
@@ -15,263 +17,80 @@ fetch_data.py   →   data/taiex-daily.{json,js}   →   index.html
 ## 快速開始
 
 ```bash
-python3 fetch_data.py     # 首次執行約 110 分鐘，絕大部分時間花在 rate limit 的 sleep
-node verify.js            # 選用：驗證資料與演算法是否符合已知數值
-xdg-open index.html       # 或直接雙擊開啟
+./run.sh                 # 增量抓取資料，再起本機伺服器 http://localhost:3001
+./run.sh --no-fetch      # 跳過抓取，直接用現有資料
+./run.sh deploy          # 發佈到 Cloudflare Pages（需先 wrangler login）
 ```
 
-網頁透過 `<script src="data/taiex-daily.js">` 載入資料，而不是 `fetch()`，所以
-**用 `file://` 直接雙擊開啟就能運作**，不需要架站。若仍偏好起一個本機伺服器：
+首次抓取約 110 分鐘（三大法人與融資只能逐日查詢，需遵守 rate limit）；之後原始回應都快取在
+`data/raw/`，每天只補新交易日，數秒完成。`index.html` 也可直接以 `file://` 開啟。
+`python3 bundle.py` 會產生內嵌 ECharts 與資料的單檔離線版 `dist/taiex-atlas-standalone.html`。
 
-```bash
-python3 -m http.server 8000   # 然後開 http://localhost:8000
-```
+### 每日更新（cron）
 
-ECharts 由 CDN 載入，因此第一次開啟需要網路連線。要完全離線（例如丟到手機上看），
-用 `python3 bundle.py` 產生 `dist/taiex-atlas-standalone.html`：ECharts、資料與
-`detect.js` 全部內嵌，單一檔案、零外部請求。`dist/` 不進版控，改完 `index.html`
-記得重打包——`tests/bundle.test.js` 會在過期時報錯。
-
-## 抓取腳本
-
-`fetch_data.py` 可重複執行且為增量式。每一筆原始回應都快取在 `data/raw/<endpoint>/`
-底下，命中快取就**完全不發送請求**——所以第二次執行只需數秒，且只會補抓新的交易日。
-
-唯二的例外是「還沒定案」的快取：**當月**的月查詢（每收盤一次就多一列）與**近五天**
-被標記為無資料的單日查詢（證交所收盤後數小時才發佈，跑太早會把「無資料」永久凍結）。
-這兩種會自動重抓；重抓失敗時沿用舊快取，不會讓整段資料憑空消失。
-
-| 資料來源 | Endpoint | 查詢單位 |
-|---|---|---|
-| 加權指數日 K | `TAIEX/MI_5MINS_HIST` | 一次一個月 |
-| 市場成交資訊 | `afterTrading/FMTQIK` | 一次一個月 |
-| 三大法人買賣金額 | `fund/BFI82U` | 一次一**天** |
-| 信用交易統計 | `marginTrading/MI_MARGN` | 一次一**天** |
-
-下面兩支就是冷啟動要跑一個多小時的原因。證交所只提供單日查詢：沒有月彙總版本，而
-TWSE OpenAPI 目錄裡的對應資源完全沒有日期參數（只回傳最近一個交易日）。因此這兩支
-只能逐交易日走過去，約 4,700 次請求。請求間隔約 1.6–2.0 秒並實作指數退避重試；
-**把 sleep 拿掉只會換來 429 與 HTML 維護頁，不會比較快**。
-
-過程中一併處理掉的坑：
-
-- **髒數值**：千分位逗號、`--`、`X`、空字串一律轉成 `null`，**絕不轉成 `0`**——
-  那會靜靜地污染所有平均值。
-- **外資欄位拆分**：2022 年起證交所把外資拆成「外資及陸資(不含外資自營商)」與
-  「外資自營商」兩列，市場慣稱的外資買賣超是**兩者相加**；早年則只有單一合併列。
-  兩種年代都涵蓋。
-
-
-常用參數：
-
-```bash
-python3 fetch_data.py --start 2024-01     # 只補某段區間
-python3 fetch_data.py --rebuild           # 純用快取重建輸出檔，零請求
-python3 bundle.py                         # 打包成單一離線 HTML
-```
-
-`--start` 指的是**要抓的範圍**，不是要保留的範圍：新抓到的日期會併回既有的
-`data/taiex-daily.json`，範圍外的日子原封不動保留。真要縮短序列請直接刪掉輸出檔
-再重抓。
-
-## 每日更新與部署
-
-`run.sh` 先增量抓取再起本機伺服器（`http://localhost:3001`，`--no-fetch` 跳過抓取）；
-`./run.sh deploy` 則發佈到 Cloudflare Pages。
-
-`update_data.sh` 是給 cron 用的包裝：加鎖避免重疊、日誌寫入 `fetch.log`（5 MB 輪替）、
-失敗時把日誌尾端印到 stderr 讓 cron 寄信。可選旗標：`--bundle` 重打包 `dist/`、
-`--commit` 資料有變才 commit、`--deploy` 發佈到 Cloudflare Pages。證交所約 19:00 才
-發佈籌碼資料，所以排在 20:00：
+`update_data.sh` 負責加鎖、日誌輪替（`fetch.log`）與失敗通知；證交所約 19:00 發佈籌碼資料：
 
 ```cron
-0 20 * * 1-5 /path/to/taiex-drawdown-atlas/update_data.sh --bundle --deploy --quiet
+0 20 * * 1-5 /path/to/taiex-drawdown/update_data.sh --bundle --deploy --quiet
 ```
 
-### Cloudflare Pages
+旗標：`--bundle` 重打包、`--commit` 資料有變才 commit、`--deploy` 發佈、`--start YYYY-MM`
+限縮抓取範圍。部署只上傳 `index.html`、`detect.js`、`data/taiex-daily.js` 三個檔案；
+專案名稱可用 `CF_PAGES_PROJECT` 覆寫。
 
-網站是純靜態檔，部署到 Pages 即可，不需要 Worker 或建置步驟。`./run.sh deploy` 只把頁面實際
-載入的三個檔案（`index.html`、`detect.js`、`data/taiex-daily.js`）複製到暫存目錄再上傳，
-`data/raw/`、日誌與測試都不會離開本機。
+## 資料來源
 
-```bash
-wrangler login                 # 只需一次；無瀏覽器環境改設 CLOUDFLARE_API_TOKEN
-./run.sh deploy                    # 首次會自動建立專案 → https://tw-stock-drawdown.pages.dev
-./run.sh deploy --branch preview   # 預覽部署，網址獨立，不影響正式站
-```
+| 資料 | Endpoint | 查詢單位 |
+|---|---|---|
+| 加權指數日 K | `TAIEX/MI_5MINS_HIST` | 月 |
+| 市場成交資訊 | `afterTrading/FMTQIK` | 月 |
+| 三大法人買賣金額 | `fund/BFI82U` | **日** |
+| 信用交易統計 | `marginTrading/MI_MARGN` | **日** |
 
-專案名稱可用 `CF_PAGES_PROJECT` 覆寫。cron 環境沒有 nvm 的 PATH，`run.sh deploy` 會自己去
-`~/.nvm` 找 `wrangler`；`wrangler login` 的憑證存在家目錄，cron 一樣讀得到。
+髒數值（`--`、`X`、空字串）一律轉 `null`，絕不轉 `0`。外資 = 「外資及陸資」+「外資自營商」
+（2022 年起拆兩列）。當月與近五日的「無資料」快取會自動重抓。
 
-## 修正波段偵測演算法
+## 偵測規則
 
-實作在 `detect.js`，由網頁與 `verify.js` **共用同一份程式碼**，兩邊不可能算出不同結果。
+實作於 `detect.js`，網頁與 `verify.js` 共用：
 
-採用峰谷法（peak-to-trough），不是固定視窗：
+1. 追蹤 running peak，回檔跌破門檻即進入修正，持續追蹤最低點。
+2. **收復前高才算一波結束**——同一波途中的反彈不另計，所以 2022 年整段熊市只算一波。
+3. 到序列結尾仍未收復 → `ongoing`。
 
-1. 維護 running peak（目前為止的最高點）。
-2. 每日計算相對該高點的回檔幅度。
-3. 向下跌破門檻 → 進入「修正中」。
-4. 修正期間持續追蹤最低的低點。
-5. 收復前高 → 該波結束，running peak 重設。
-6. 走到序列結尾仍未收復 → 標記 `status: "ongoing"`，收復天數留空。
+門檻（5/7/10/15%）、價格基準（盤中 / 收盤）、收復容差與反彈切分都是頁面上的即時控制項。
+預設 7% + 收盤價 + 嚴格收復。
 
-**同一波下跌途中的反彈不另計為新的一次**，只有創新高才算一波結束。這正是 2022 年
-整段熊市會被算成**一次**、而非固定視窗法報出的四、五次的原因——`verify.js` 對這點
-有明確斷言。
+- **谷底後 1M / 3M / 1Y**：自谷底收盤價起算 21 / 63 / 252 個交易日報酬；資料不足顯示「未滿」。
+- **融資殺盤幅度** = 區間融資減幅(%) ÷ 指數跌幅(%)。> 1.5 通常代表融資籌碼清洗較徹底。
 
-門檻（5/7/10/15%）與價格基準（盤中高低 / 收盤價）都是即時控制項，切換時在前端重算。
-兩種基準算出來的波段數量確實會不同，所以兩種都保留，而不是替你選一個。
-
-**預設為 7% + 收盤價、收復認定「嚴格」**，開啟時是 9 波。收盤價基準較保守：盤中戳到門檻但收盤拉回的
-假摔不會被算成一波。想看盤中極值（含長下影線那種）就切到「盤中高低」。
-
-各門檻與基準的波段數：
-
-| 門檻 | 5% | 7% | 10% | 15% |
-|---|---|---|---|---|
-| 盤中高低 | 18 | 12 | 8 | 5 |
-| 收盤價 | 14 | **9** | 7 | 5 |
-
-（嚴格收復認定、資料至 2026-10-16。）
-
-### 為什麼盤中基準偵測出 10 次，而規格參考表列 8 次
-
-> 以下比較用**盤中高低**基準，因為規格第 7 節的參考表列的就是盤中極值。
-> `verify.js` 也以盤中基準做這組比對。介面預設的收盤價基準在 7% 下是 7 波。
-
-
-**這不是 bug，是「只有創新高才算一波結束」這條規則的必然結果。** 參考表是人按新聞
-事件切分的，演算法是按創新高切分的，兩者在兩個地方必然不一致：
-
-- **2023/08–10 那波（參考表 #4）被併入 2022 年熊市。** 2022/01 的高點 18,619
-  一直到 **2024-02-15** 才被收復；2023/08 起跌前的最高點只有 18,138，並未創新高。
-  所以那一段完整落在 2022 年熊市的「收復途中」，依規則不能另計。
-- **2025/01–04 那波（參考表 #6）被併入 2024/07。** 2024/07 高點 24,416.67 一直到
-  **2025-08-18** 才被收復；2025/01 的高點 23,943 沒有越過它。因此 2024/07 與
-  2025/04 是同一波，谷底取更深的 17,306.97（−29.1%），而非參考表的 19,662.74。
-
-反過來，演算法另外找出四次參考表沒收錄、但確實達到 7% 的修正：2021/01（−7.1%）、
-2024/04（−7.6%）、2025/11（−7.6%）、2026/06（−9.8%）。
-
-`8 − 2（合併） + 4（參考表未收錄）= 10`，完全對得起來。`verify.js` 對這兩處合併有
-明確斷言，若哪天它們「各自獨立出現」反而代表新高規則失效了。
-
-### 收復認定容差（預設嚴格）
-
-`recovered = high >= peak * (1 - tol)`——距前高在 `tol` 之內就視為已收復。預設的
-「嚴格」即 `tol = 0`：只有真正創新高才算收復，「收復」就等於「回到前高」。
-
-放寬容差是分開「共用同一個高點的兩次崩跌」最直接的辦法：2025/01 反彈到距 2024/07 高點僅
-1.94% 之處，3% 容差就接受它為一次收復，於是 2024/07（−19.5%）與 2025/01（−27.7%）
-各自成為獨立波段，正好對上參考表的 #5 與 #6。
-
-| 容差 | 波段數 | 2022 熊市完整 | 真正創新高收復 |
-|---|---|---|---|
-| **嚴格 0%（預設）** | **12** | **是** | **12** |
-| 1% | 13 | 是 | 3 |
-| 2% | 17 | 是 | 1 |
-| 3% | 19 | 是 | 0 |
-| 5% | 25 | 否 | 0 |
-
-（盤中高低、7% 門檻、資料至 2026-10-16。）
-
-**代價要講清楚**：容差收復後，running peak 會下修到那個較低的高點，所以效果會沿著序列
-累積。3% 之下 **19 波沒有任何一波是靠真正創新高結束的**，「收復」不再等於「回到前高」。
-這正是預設維持嚴格的原因；想分開共用高點的崩跌，1%–2% 是代價較小的折衷。
-
-以容差結束的波段會標上「容差」標記，其收復天數算的是**碰到容差帶**的天數。
-
-### 谷底後 1 個月 / 3 個月 / 1 年
-
-自該波**谷底當日的收盤價**起算，往後 21 / 63 / 252 個交易日的報酬率。
-
-用收盤價而非盤中最低點作為基準，是因為沒有人真的成交在最低那一跳；用最低點會讓每個
-數字都虛胖，而且盤中與收盤兩種基準的結果會變得無法比較。資料長度還不夠時顯示
-**未滿**，而不是留白或給一個「只走到一半」的數字——「還沒到」和「沒有變化」是兩件事。
-
-### 融資殺盤幅度
-
-表格最後一欄，也是這個專案真正有價值的地方：
-
-```
-融資殺盤幅度 = 區間融資餘額減幅(%) ÷ 指數跌幅(%)
-```
-
-比值接近 1.0 代表融資餘額與指數同步縮減。**超過 1.5** 代表散戶去槓桿的速度明顯快於
-指數下跌，一般解讀為融資籌碼已清洗得較乾淨。該欄使用單一色相的順序色階，且**數值
-本身一律顯示**，顏色從不是唯一的資訊載體。
-
-這一欄描述的是**已經發生**的籌碼變化。它不是訊號，本專案也不產生任何買賣建議或目標價。
-
+本專案只描述已發生的籌碼變化，不構成投資建議。
 
 ## 測試
 
 ```bash
-node tests/run.js            # 全部
-node tests/run.js detect     # 只跑檔名含 detect 的套件
-npm test                     # 同 node tests/run.js
+npm install   # 只有 render 測試需要 jsdom + echarts；未安裝時該套件顯示 SKIP
+npm test      # 全部；node tests/run.js detect 只跑名稱含 detect 的套件
 ```
 
-| 套件 | 測什麼 | 斷言數 | 需要 |
-|---|---|---|---|
-| `tests/detect.test.js` | 演算法規則，跑在手工序列上 | 111 | 無 |
-| `tests/fetch_test.py` | `fetch_data.py` 的解析與快取邏輯 | 63 | Python 3 |
-| `tests/render.test.js` | 在 headless DOM 中實際執行 `index.html` | 61 | `npm i` |
-| `tests/bundle.test.js` | `dist/` 是否落後於 `index.html` / 資料 | 4 | 已打包的 `dist/` |
-| `verify.js` | 真實資料完整性與驗收條件 | 47 | 已抓好的資料 |
-
-全部通過時為 **178 passed · 0 failed · 0 skipped**（`verify.js` 與 `fetch_test.py`
-在執行器中各計為一個套件，內部斷言數如上表）。
-
-`tests/detect.test.js` **完全不依賴抓下來的資料**，跑在手工建構的序列上，所以它釘住的是
-「規則」而不是「這段期間市場剛好怎麼走」。包含門檻邊界（−7.0% 要算、−6.9% 不算）、
-盤中與收盤基準的差異、空值不得變成 0，以及一組決定性隨機漫步序列的結構性不變式
-（區間不重疊、谷不早於峰、已收復者確實創新高）。
-
-`tests/render.test.js` 需要 `jsdom` 與 `echarts` 兩個 devDependency，沒安裝時會**明確
-標示 SKIP** 而不是默默通過——跳過的守門員不是綠燈。安裝後才會執行：
-
-```bash
-npm install     # 只有測試需要（約 75MB）；儀表板本身零依賴
-```
-
-套件會顯示 SKIP。
-
-`tests/fetch_test.py` **絕不連網**：所有 `fetch_*` 呼叫都帶 `rebuild_only=True`，只讀
-`data/raw/` 底下的真實快取；`setUp()` 另外把 `SESSION.get` 換成會拋例外的樁。這個樁刻意
-繼承 `BaseException` 而非 `Exception`——因為 `fetch()` 用 `except Exception` 驅動退避重試，
-若拋 `AssertionError` 會被重試層吞掉、重試三次（白睡 6 秒）再安靜地回傳 `None`，測試不會
-紅。套件本身有一條 `test_network_guard_is_effective` 在驗證這個樁確實會炸。
-
-### 兩個由測試釘住的回歸
-
-- **主圖寬度**：ECharts 只在 `init` 當下量一次容器。若此時容器仍在 `hidden` 的祖先底下，
-  它會量到 0×0、退回 100px 預設寬，把 1,350 個交易日全擠在左邊緣。測試中的尺寸 stub
-  **會遵守 `hidden`**，並斷言 SVG 寬度與實際繪出的路徑跨距——早期版本在建構後才補尺寸，
-  結果在明顯壞掉的頁面上回報一切正常。
-- **縮放狀態**：主圖以 `notMerge:true` 重建，若不把縮放範圍存成狀態，任何重繪都會把
-  視野打回全區間。測試會縮放後切換線圖/K 線，斷言跨距不變。
+| 套件 | 內容 |
+|---|---|
+| `tests/detect.test.js` | 演算法規則，跑在手工序列上 |
+| `tests/fetch_test.py` | 抓取腳本的解析與快取（不連網） |
+| `tests/render.test.js` | 在 jsdom 中實際執行 `index.html` |
+| `tests/bundle.test.js` | `dist/` 是否落後於來源 |
+| `verify.js` | 真實資料完整性與已知波段比對 |
 
 ## 檔案
 
 ```
-fetch_data.py   抓取 + 快取 + 合併      （單一檔案，可重複執行）
-detect.js       修正波段偵測            （網頁與 Node 共用）
-verify.js       資料與演算法驗證        （node verify.js）
-index.html      儀表板                  （單一檔案，CDN 載入 ECharts）
-bundle.py       打包單一離線 HTML       （python3 bundle.py）
-run.sh          本機抓取 + 起伺服器      （./run.sh；./run.sh deploy 發佈到 Cloudflare Pages）
-update_data.sh  cron 用的每日更新        （--bundle / --commit / --deploy）
-package.json    僅測試用的 devDependency 與 npm scripts
-tests/
-  run.js          測試執行器（含 SKIP 回報）
-  helpers.js      極簡斷言工具，無測試框架
-  detect.test.js  演算法單元測試
-  fetch_test.py   抓取腳本解析測試（unittest）
-  render.test.js  jsdom 端到端渲染測試
-  bundle.test.js  檢查 dist/ 是否落後於來源檔
-data/raw/       原始回應快取
-dist/           打包輸出（不進版控）
-data/taiex-daily.json / .js   合併後輸出
+fetch_data.py    抓取 + 快取 + 合併
+detect.js        修正波段偵測
+verify.js        資料與演算法驗證
+index.html       儀表板（CDN 載入 ECharts）
+bundle.py        打包單檔離線 HTML
+run.sh           本機抓取 + 伺服器 / deploy
+update_data.sh   cron 每日更新
+docs/            README 截圖
+tests/           測試與執行器
 ```
