@@ -63,10 +63,22 @@
     padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:20px}
   h1{font-size:20px;font-weight:600;margin:0;letter-spacing:-.01em}
   .sub{color:var(--ink-3);font-size:12.5px;margin-top:4px}
-  .nav{font-size:12.5px;margin-bottom:6px}
-  .nav a{color:var(--ink-3);text-decoration:none}
-  .nav a:hover{color:var(--ink)}
-  .nav b{color:var(--ink);font-weight:500}
+  /* Page tabs: the two pages are siblings, so the switch sits above both
+     headers in the same place, sized like a control rather than a footnote. */
+  .tabs{display:flex;gap:4px;margin:0 0 16px;padding:4px;width:max-content;max-width:100%;
+    background:var(--surface);border:1px solid var(--line);border-radius:10px}
+  .tabs a{display:inline-flex;align-items:center;gap:7px;padding:8px 18px;border-radius:7px;
+    color:var(--ink-2);text-decoration:none;font-size:14.5px;font-weight:500;white-space:nowrap;
+    transition:background .12s,color .12s}
+  .tabs a:hover{color:var(--ink);background:var(--surface-2)}
+  .tabs a[aria-current="page"]{color:var(--ink);background:var(--surface-2);
+    box-shadow:inset 0 0 0 1px var(--line), inset 0 -2px 0 var(--c-up)}
+  .tabs a:focus-visible{outline:2px solid var(--ink-3);outline-offset:1px}
+  .tabs svg{flex:0 0 auto}
+  @media (max-width: 720px){
+    .tabs{width:100%;margin-bottom:12px}
+    .tabs a{flex:1;justify-content:center;padding:8px 10px;font-size:14px}
+  }
   .controls{display:flex;flex-wrap:wrap;gap:18px;align-items:center}
   .ctrl-label{color:var(--ink-3);font-size:11px;text-transform:uppercase;letter-spacing:.06em;
     display:block;margin-bottom:5px}
@@ -148,9 +160,10 @@
 <body>
 <div class="wrap">
 
+  <nav class="tabs" aria-label="頁面"><a href="index.html"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 12.5 6 7l3 3 5.5-6.5"/></svg>大盤修正波段</a><a href="stock.html" aria-current="page"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M5 1.5v13M11 3.5v9"/><rect x="3" y="4.5" width="4" height="6" rx=".6" fill="currentColor"/><rect x="9" y="6" width="4" height="4" rx=".6"/></svg>個股籌碼</a></nav>
+
   <header>
     <div>
-      <div class="nav"><a href="index.html">大盤修正波段</a> · <b>個股籌碼</b></div>
       <h1 id="title">個股籌碼監控</h1>
       <div class="sub" id="meta">載入中…</div>
     </div>
