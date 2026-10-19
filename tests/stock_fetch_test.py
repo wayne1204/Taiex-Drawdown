@@ -93,6 +93,43 @@ class TestQuotes(Base):
         self.assertFalse(any(fs.UNIVERSE_RE.fullmatch(c) for c in no))
 
 
+class TestTpex(Base):
+    def test_quotes(self):
+        payload = {"stat": "ok", "tables": [{"fields": [
+            "代號", "名稱", "收盤 ", "漲跌", "開盤 ", "最高 ", "最低", "成交股數  ", " 成交金額(元)"],
+            "data": [["6488", "環球晶", "902.00", "-21.00", "936.00", "936.00", "890.00",
+                      "14,831,000", "1"]]}]}
+        out = fs.slim_tpex_quotes(payload)
+        self.assertEqual(out["rows"]["6488"], [936, 936, 890, 902, 14831])
+        self.assertEqual(out["names"]["6488"], "環球晶")
+
+    def test_inst_by_position_with_sum_check(self):
+        fields = ["代號", "名稱"] + ["買進股數", "賣出股數", "買賣超股數"] * 7 + ["三大法人買賣超股數合計"]
+        good = ["6488", "環球晶", "3,922,489", "8,379,161", "-4,456,672", "0", "0", "0",
+                "3,922,489", "8,379,161", "-4,456,672", "246,714", "25,000", "221,714",
+                "85,700", "182,440", "-96,740", "928,297", "978,990", "-50,693",
+                "1,013,997", "1,161,430", "-147,433", "-4,382,391"]
+        bad = list(good)
+        bad[0], bad[23] = "9999", "1"          # nets no longer add up: layout changed
+        out = fs.slim_tpex_inst({"tables": [{"fields": fields, "data": [good, bad]}]})
+        self.assertEqual(out["rows"], {"6488": [-4456672, 221714, -147433]})
+
+    def test_inst_unknown_layout_is_no_data(self):
+        out = fs.slim_tpex_inst({"tables": [{"fields": ["代號", "名稱", "x"], "data": [["1", "a", "2"]]}]})
+        self.assertTrue(out.get("_empty"))
+
+    def test_margin(self):
+        payload = {"tables": [{"fields": ["代號", "名稱", "前資餘額(張)", "資買", "資賣", "現償",
+                                          "資餘額", "資屬證金"],
+                               "data": [["6488", "環球晶", "13,977", "1,009", "1,014", "3", "13,969", "221"]]}]}
+        self.assertEqual(fs.slim_tpex_margin(payload)["rows"], {"6488": [13977, 13969]})
+
+    def test_unpublished_day_is_empty_not_final(self):
+        # TPEx answers stat "ok" with an empty table before it publishes a day
+        self.assertTrue(fs.slim_tpex_quotes({"stat": "ok", "tables": [{"fields": [], "data": []}]})["_empty"])
+        self.assertEqual(fs._tpex_date("20261016"), "2026/10/16")
+
+
 class TestHoldersFreshness(Base):
     def test_weekly_after_saturday(self):
         from datetime import date

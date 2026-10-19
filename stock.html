@@ -270,7 +270,7 @@
       <p><strong>主力買賣超</strong> = 當期買超前 15 名券商分點合計 − 賣超前 15 名合計（富邦 e-Broker 定義）；
       日序列以每日分點表回補整段期間。選擇過去日期時，近 1 日分點顯示當天資料，近 5/20/60 日統計只提供最新交易日。<strong>大戶</strong> = 集保持股 &gt; 400 張者，
       提示框另列 &gt; 1000 張。</p>
-      <p>資料來源：臺灣證券交易所（個股日成交、三大法人買賣超 T86、融資融券彙總）、
+      <p>資料來源：臺灣證券交易所與證券櫃檯買賣中心（每日收盤行情、三大法人買賣超、融資融券餘額）、
       神秘金字塔 norway.twsthr.info（集保股權分散）、富邦 e-Broker（主力進出）。
       缺漏以斷點呈現，不以 0 補值。本頁僅描述已發生的籌碼變化，不構成投資建議。</p>
     </footer>
@@ -343,8 +343,9 @@
   // browser's own suggestion dropdown. Watchlist stocks are also chips.
   const q = document.getElementById('q'), qMsg = document.getElementById('q-msg');
   const label = s => `${s.code} ${s.name||''}`.trim();
+  const mkt = s => s.exchange === 'TPEx' ? '上櫃' : '上市';
   document.getElementById('stock-options').innerHTML =
-    LIST.map(s=>`<option value="${label(s)}"></option>`).join('');
+    LIST.map(s=>`<option value="${label(s)}" label="${mkt(s)}"></option>`).join('');
   const tracked = LIST.filter(s=>s.tracked);
   const chips = document.getElementById('chips');
   if(tracked.length){
@@ -376,7 +377,7 @@
   function submitSearch(){
     const hit = resolve(q.value);
     if(hit){ pickStock(hit.code); q.blur(); }
-    else if(q.value.trim()) qMsg.textContent = `找不到「${q.value.trim()}」（僅上市股票與 ETF）`;
+    else if(q.value.trim()) qMsg.textContent = `找不到「${q.value.trim()}」（上市櫃股票與 ETF）`;
   }
   q.addEventListener('change', submitSearch);
   q.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); submitSearch(); } });
@@ -703,7 +704,7 @@
       document.getElementById('title').textContent = `${stock.code} ${stock.name}`;
       document.title = `${stock.code} ${stock.name} · 個股籌碼監控`;
       document.getElementById('meta').textContent =
-        `${fd(stock.start)} – ${fd(stock.end)} · ${S.rows.length} 個交易日 · 更新於 ${stock.generatedAt.replace('T',' ')}`;
+        `${mkt(stock)} · ${fd(stock.start)} – ${fd(stock.end)} · ${S.rows.length} 個交易日 · 更新於 ${stock.generatedAt.replace('T',' ')}`;
       sel = S.rows.length - 1;
       syncDate();
       renderKpis(); renderChart(); renderBrokers();
