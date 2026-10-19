@@ -165,7 +165,7 @@ def is_stale(key, payload):
     return False
 
 
-def fetch(endpoint, path, params, key, rebuild_only=False, slim=None, base=BASE):
+def fetch(endpoint, path, params, key, rebuild_only=False, slim=None, base=BASE, headers=None):
     """
     Cached GET with exponential backoff. Returns a dict, or None when that
     day/month has no data. A cache hit issues no request at all - this is what
@@ -205,7 +205,7 @@ def fetch(endpoint, path, params, key, rebuild_only=False, slim=None, base=BASE)
     for attempt in range(MAX_RETRIES):
         try:
             _stats["requests"] += 1
-            r = SESSION.get(url, params=params, timeout=30)
+            r = SESSION.get(url, params=params, timeout=30, headers=headers)
             if r.status_code == 429 or r.status_code >= 500:
                 raise requests.HTTPError(f"HTTP {r.status_code}")
             r.raise_for_status()
