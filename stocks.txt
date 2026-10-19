@@ -2,3 +2,9 @@
 # The first entry is the stock the page opens on.
 2330  # 台積電
 2327  # 國巨
+2301  # 光寶科
+3008  # 大立光
+3042  # 晶技
+3661  # 世芯-KY
+4958  # 臻鼎-KY
+8261  # 富鼎
