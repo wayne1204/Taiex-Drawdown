@@ -51,15 +51,19 @@ deploy() {
   fi
   export PATH="$(dirname "$wrangler"):$PATH"
 
-  local files=(index.html detect.js data/taiex-daily.js) f
+  local files=(index.html stock.html detect.js data/taiex-daily.js) f
   for f in "${files[@]}"; do
     [[ -s "$f" ]] || { echo "run.sh deploy: missing $f (run python3 fetch_data.py)" >&2; exit 1; }
   done
 
-  # The single-stock page is optional: shipped only once fetch_stocks.py has
-  # built data for it.
+  # stock.html always ships: index.html links to it, and Pages answers a
+  # missing path with index.html, so leaving it out makes the tab silently
+  # reload the market page. Without data it shows its own "run
+  # fetch_stocks.py" notice instead.
   if [[ -s data/stocks/index.js ]]; then
-    files+=(stock.html data/stocks/*.js)
+    files+=(data/stocks/*.js)
+  else
+    echo "run.sh deploy: WARNING no data/stocks/ (run python3 fetch_stocks.py); stock.html ships without data" >&2
   fi
 
   STAGE="$(mktemp -d)"
