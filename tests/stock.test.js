@@ -192,9 +192,12 @@ module.exports = {
       const q = doc.getElementById("q");
       const search = v => { q.value = v; q.dispatchEvent(new window.Event("change")); };
       t.eq("search box shows the stock", q.value, "9999 測試股");
+      t.ok("search box has no suggestion dropdown", !q.hasAttribute("list") && !doc.querySelector("datalist"));
       t.ok("no API here: account UI, 自選 chips and ☆ stay hidden",
         doc.getElementById("account").hidden && doc.getElementById("chips").hidden &&
         doc.getElementById("btn-fav").hidden);
+      t.ok("no API here: no left column, the page keeps its full width",
+        doc.getElementById("side").hidden && !doc.getElementById("layout").classList.contains("with-side"));
       search("另一");
       await sleep(50);
       t.eq("a partial name finds the stock", doc.getElementById("title").textContent, "8888 另一檔");
@@ -250,7 +253,14 @@ async function accountFlow(t, fx) {
     t.ok("[account] signed in: name shown, sign-in button hidden",
       !doc.getElementById("account").hidden && doc.getElementById("acct-name").textContent === "Ann" &&
       doc.getElementById("gsi").hidden);
+    t.ok("[account] account and 自選 sit in the left column",
+      !doc.getElementById("side").hidden && doc.getElementById("layout").classList.contains("with-side") &&
+      doc.getElementById("side").contains(doc.getElementById("account")) &&
+      doc.getElementById("side").contains(doc.getElementById("chips")));
     t.eq("[account] chips are the user's own list, not stocks.txt", chipCodes(), ["8888"]);
+    t.eq("[account] a list row shows code and name, with a count",
+      [doc.querySelector('#chips button[data-code="8888"]').textContent, doc.getElementById("fav-count").textContent],
+      ["8888另一檔", "1"]);
     const fav = doc.getElementById("btn-fav");
     t.eq("[account] ☆ for a stock not in the list", [fav.hidden, fav.textContent], [false, "☆ 加入自選"]);
     fav.click();
@@ -267,7 +277,8 @@ async function accountFlow(t, fx) {
     doc.getElementById("btn-logout").click();
     await sleep(50);
     t.ok("[account] logout hides the list and asks to sign in",
-      doc.getElementById("chips").hidden && doc.getElementById("acct-user").hidden && !doc.getElementById("gsi").hidden);
+      doc.getElementById("chips").hidden && doc.getElementById("acct-user").hidden && !doc.getElementById("gsi").hidden &&
+      !doc.getElementById("fav-signin").hidden && !doc.getElementById("side").hidden);
     fav.click();
     t.ok("[account] ☆ while signed out asks to sign in first",
       /請先登入/.test(doc.getElementById("acct-msg").textContent));
