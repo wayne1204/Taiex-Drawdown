@@ -272,16 +272,31 @@ def slim_tpex_margin(payload):
     return _slim_result(rows)
 
 
+# TPEx drops connections from some networks outright. Once this many days in
+# a row fail, stop asking for the rest of the run instead of retrying every day.
+TPEX_GIVE_UP_DAYS = 3
+TPEX_HEADERS = {"Referer": "https://www.tpex.org.tw/zh-tw/index.html"}
+_tpex = {"failed_days": 0, "offline": False}
+
+
 def fetch_tpex_day(ymd, rebuild_only=False):
     """-> (quotes, names, inst, margin) for one session, shaped like the TWSE ones."""
     d = _tpex_date(ymd)
-    q = fd.fetch("TPEX_QUOTES", "afterTrading/otc", {"date": d, "type": "EW", "response": "json"},
-                 ymd, rebuild_only, slim=slim_tpex_quotes, base=TPEX_BASE) or {}
-    i = fd.fetch("TPEX_INST", "insti/dailyTrade",
-                 {"type": "Daily", "sect": "AL", "date": d, "response": "json"},
-                 ymd, rebuild_only, slim=slim_tpex_inst, base=TPEX_BASE) or {}
-    m = fd.fetch("TPEX_MARGIN", "margin/balance", {"date": d, "response": "json"},
-                 ymd, rebuild_only, slim=slim_tpex_margin, base=TPEX_BASE) or {}
+    cache_only = rebuild_only or _tpex["offline"]
+    get = lambda name, path, params, slim: fd.fetch(  # noqa: E731
+        name, path, {**params, "date": d, "response": "json"}, ymd, cache_only,
+        slim=slim, base=TPEX_BASE, headers=TPEX_HEADERS)
+    q = get("TPEX_QUOTES", "afterTrading/otc", {"type": "EW"}, slim_tpex_quotes)
+    i = get("TPEX_INST", "insti/dailyTrade", {"type": "Daily", "sect": "AL"}, slim_tpex_inst)
+    m = get("TPEX_MARGIN", "margin/balance", {}, slim_tpex_margin)
+    if not cache_only:
+        # fd.fetch answers None only when every attempt failed and nothing is cached
+        _tpex["failed_days"] = _tpex["failed_days"] + 1 if q is i is m is None else 0
+        if _tpex["failed_days"] >= TPEX_GIVE_UP_DAYS:
+            _tpex["offline"] = True
+            print(f"  !! TPEx unreachable for {TPEX_GIVE_UP_DAYS} days in a row; using "
+                  "cached TPEx data only for the rest of this run", file=sys.stderr)
+    q, i, m = q or {}, i or {}, m or {}
     return q.get("rows") or {}, q.get("names") or {}, i.get("rows") or {}, m.get("rows") or {}
 
 
