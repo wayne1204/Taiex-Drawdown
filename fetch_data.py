@@ -165,7 +165,7 @@ def is_stale(key, payload):
     return False
 
 
-def fetch(endpoint, path, params, key, rebuild_only=False, slim=None):
+def fetch(endpoint, path, params, key, rebuild_only=False, slim=None, base=BASE):
     """
     Cached GET with exponential backoff. Returns a dict, or None when that
     day/month has no data. A cache hit issues no request at all - this is what
@@ -173,7 +173,10 @@ def fetch(endpoint, path, params, key, rebuild_only=False, slim=None):
 
     `slim`, when given, maps an OK payload to the (smaller) dict that is cached
     and returned instead - for whole-market responses where only a few columns
-    are ever read back.
+    are ever read back. A slim result marked `_empty` is cached as "no data",
+    so a recent day is asked again (see is_stale).
+
+    `base` points the same cache and retry logic at another host (TPEx).
     """
     cp = _cache_path(endpoint, key)
     today = date.today()
@@ -195,7 +198,7 @@ def fetch(endpoint, path, params, key, rebuild_only=False, slim=None):
     if rebuild_only:
         return None
 
-    url = f"{BASE}/{path}"
+    url = f"{base}/{path}"
     delay = 2.0
     last_err = None
 
@@ -214,7 +217,7 @@ def fetch(endpoint, path, params, key, rebuild_only=False, slim=None):
 
             payload = r.json()
             stat = payload.get("stat", "")
-            if stat != "OK":
+            if str(stat).upper() != "OK":      # TPEx answers "ok"
                 # Non-trading day / no data - normal. Cache an empty marker so we
                 # never ask again.
                 payload = {"stat": stat, "_empty": True}

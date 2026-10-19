@@ -68,14 +68,15 @@ fetch_data.py   →   data/taiex-daily.{json,js}   →   index.html
 
 ## 個股籌碼監控（`stock.html`）
 
-**所有上市股票與 ETF**（約 1,300 檔）皆可用代號或名稱搜尋，**不做波段 / 回撤分析**，只呈現籌碼。
-`stocks.txt` 觀察清單裡的股票另外加上主力與券商分點，並顯示為頁首的快捷鈕（第一檔為預設開啟）。
+**所有上市、上櫃股票與 ETF**（約 2,300 檔）皆可用代號或名稱搜尋，**不做波段 / 回撤分析**，只呈現籌碼。
+`stocks.txt` 觀察清單裡的股票另外加上主力與券商分點（清單本身不會顯示在頁面上；第一檔為預設開啟）。
+使用者可用 Google 帳號登入，各自維護自己的**自選**清單（見下方「帳號與自選」）。
 
 | 面板 | 來源 | 頻率 | 涵蓋 |
 |---|---|---|---|
-| 日 K（含 MA5/20/60）、成交量 | TWSE `afterTrading/MI_INDEX`（全市場） | 日 | 全部 |
-| 三大法人買賣超（外資 / 投信 / 自營商） | TWSE `fund/T86`（全市場） | 日 | 全部 |
-| 融資增減、融資餘額 | TWSE `marginTrading/MI_MARGN`（ALL） | 日 | 全部 |
+| 日 K（含 MA5/20/60）、成交量 | TWSE `afterTrading/MI_INDEX`、TPEx `afterTrading/otc`（全市場） | 日 | 全部 |
+| 三大法人買賣超（外資 / 投信 / 自營商） | TWSE `fund/T86`、TPEx `insti/dailyTrade`（全市場） | 日 | 全部 |
+| 融資增減、融資餘額 | TWSE `marginTrading/MI_MARGN`（ALL）、TPEx `margin/balance` | 日 | 全部 |
 | 股東人數、大戶人數（>400 張，提示框另列 >1000 張） | [神秘金字塔](https://norway.twsthr.info/StockHolders.aspx?stock=2327) | 週 | 全部 |
 | 主力買賣超、券商分點買賣超前 15 名（1/5/20/60 日） | [富邦 e-Broker](https://fubon-ebrokerdj.fbs.com.tw/z/zc/zco/zco_2327.djhtm) | 日 | 觀察清單 |
 
@@ -87,18 +88,50 @@ echo 2317 >> stocks.txt                   # 把股票加入觀察清單（多出
 ```
 
 - 單位一律為**張**。日 K、法人、融資都是「一天一次全市場查詢」，快取只保留需要的欄位，不論建幾檔股票，
-  每天都只有 3 個 TWSE 請求。
-- 股東 / 大戶每週更新一次（週六之後第一次執行時重抓全部股票的集保頁，約 1,300 頁、45 分鐘）。
+  每天都只有 6 個請求（證交所、櫃買中心各 3 個）。櫃買法人表的欄位名稱重複，依位置取值，
+  並逐列驗證外資 + 投信 + 自營商 = 三大法人合計，不符的列捨棄。
+- 股東 / 大戶每週更新一次（週六之後第一次執行時重抓全部股票的集保頁，約 2,300 頁、75 分鐘）。
 - 主力與分點需要每檔每日一個請求，只對觀察清單抓取：富邦序列只回溯約 45 個交易日，其餘以逐日分點表
   （自設區間查詢，過去日永久快取）回補。每多一檔觀察股，首次約多 8 分鐘。
-- **首次建置**（本機沒有 `data/raw/` 快取）：全市場約 1–1.5 小時；之後每晚數分鐘（週一含集保頁約 1 小時）。
+- **首次建置**（本機沒有 `data/raw/` 快取）：上市櫃全部約 3 小時（櫃買中心回應較慢）；之後每晚數分鐘
+  （週六後首次含集保頁約 1.5 小時）。
 - 頁面上的**日期**欄可檢視任一交易日的籌碼與當日分點；三大法人面板右上可分別開關外資 / 投信 / 自營商 / 合計。
 - 預設開啟 2330；`stock.html#2327` 可直接開其他股票。
 - 集保股權分散在減資 / 分割當週會出現「1 人持有 100%」的佔位列，一律剔除。
 - `run.sh`、`update_data.sh` 在 `stocks.txt` 存在時自動一併更新；個股抓取失敗只記警告，不影響大盤資料。
-- `data/stocks/` 不進 git：在執行抓取的機器上產生，`./run.sh deploy` 直接從本機上傳（約 1,300 個檔案、
-  數十 MB）。新 clone 須先跑一次 `python3 fetch_stocks.py`，頁面才有個股資料。
-- 只涵蓋上市（TWSE）；上櫃（TPEx）股票不在這三個全市場資料表裡。
+- `data/stocks/` 不進 git：在執行抓取的機器上產生，`./run.sh deploy` 直接從本機上傳（約 2,300 個檔案、
+  一百多 MB，遠低於 Cloudflare Pages 免費方案的 20,000 檔 / 單檔 25 MiB 上限）。新 clone 須先跑一次
+  `python3 fetch_stocks.py`，頁面才有個股資料。
+- 缺漏一律留白：ETF 沒有集保分散頁、新上市股票從掛牌日開始、當日無法人 / 融資列的股票即為斷點。
+
+## 帳號與自選（Google 登入）
+
+`stock.html` 右上可用 Google 帳號登入；登入後按標題旁的 ☆ 把股票加入自選，自選顯示在頁首、跨裝置保存。
+自選只是個人書籤，**不影響**哪些股票有主力 / 分點資料（那仍由站方的 `stocks.txt` 決定）。
+
+後端是 Cloudflare Pages Functions（`functions/api/*` → `lib/account.mjs`）加一個 D1 資料庫，
+`./run.sh deploy` 會一併部署。伺服器端驗證 Google ID token（簽章、發行者、audience、到期），
+session 以 HttpOnly Cookie 保存，資料庫只存 token 的 SHA-256；每位使用者只存 Google 帳號 ID、
+email、名稱、頭像網址與自選代號。
+
+一次性設定：
+
+1. **Google OAuth 用戶端**：Google Cloud Console → API 和服務 → 憑證 → 建立 OAuth 用戶端 ID（網頁應用程式）。
+   「已授權的 JavaScript 來源」填 `https://tw-stock-drawdown.pages.dev`（要在預覽網址或本機測試再加
+   `https://<branch>.tw-stock-drawdown.pages.dev`、`http://localhost:8788`），不需要重新導向 URI。
+   OAuth 同意畫面設為「外部」並**發布**（測試模式只允許測試使用者登入）。
+2. **D1 資料庫**：`npx wrangler d1 create tw-stock-atlas`（資料表會在第一次請求時自動建立）。
+3. **Cloudflare Pages 專案設定**（Workers & Pages → `tw-stock-drawdown` → Settings）：
+   - Bindings → Add → D1 database：變數名稱 `DB`，選上一步的資料庫。
+   - Variables and Secrets → 新增 `GOOGLE_CLIENT_ID`（第 1 步的用戶端 ID），Production 與 Preview 都加。
+4. 重新 `./run.sh deploy`。
+
+沒有設定以上兩項時，`/api/*` 回 503，頁面自動隱藏登入與自選，其他功能照常。
+`./run.sh` 的本機伺服器沒有後端，同樣不顯示登入；要在本機測試帳號：
+
+```bash
+npx wrangler pages dev . --d1 DB=local --binding GOOGLE_CLIENT_ID=<用戶端 ID>   # http://localhost:8788/stock.html
+```
 
 ## 測試
 
@@ -112,6 +145,8 @@ npm test      # 全部；node tests/run.js detect 只跑名稱含 detect 的套�
 | `tests/detect.test.js` | 演算法規則，跑在手工序列上 |
 | `tests/fetch_test.py` | 抓取腳本的解析與快取（不連網） |
 | `tests/stock_fetch_test.py` | 個股抓取的解析（不連網） |
+| `tests/stock.test.js` | 在 jsdom 中實際執行 `stock.html`（含模擬 API 的登入 / 自選流程） |
+| `tests/account.test.js` | 帳號後端：Google token 驗證、session、自選（SQLite 模擬 D1） |
 | `tests/render.test.js` | 在 jsdom 中實際執行 `index.html` |
 | `tests/bundle.test.js` | `dist/` 是否落後於來源 |
 | `verify.js` | 真實資料完整性與已知波段比對 |
@@ -125,6 +160,7 @@ detect.js        修正波段偵測
 verify.js        資料與演算法驗證
 index.html       大盤儀表板（CDN 載入 ECharts）
 stock.html       個股籌碼頁
+functions/api/   Pages Functions：登入、自選 API（實作在 lib/account.mjs）
 bundle.py        打包單檔離線 HTML
 run.sh           本機抓取 + 伺服器 / deploy
 update_data.sh   cron 每日更新

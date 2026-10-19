@@ -50,6 +50,8 @@
     --c-ma5:#1b1b18; --c-ma20:#a86a00; --c-ma60:#2468c4;
   }
   *{box-sizing:border-box}
+  /* hidden must win over any display rule (.acct, .chips are flex) */
+  [hidden]{display:none !important}
   html,body{margin:0;padding:0}
   body{
     background:var(--bg); color:var(--ink);
@@ -105,6 +107,13 @@
   .search input:focus{outline:none;border-color:var(--ink-3)}
   .search-msg{position:absolute;left:0;top:100%;margin-top:4px;font-size:11.5px;color:var(--c-up);
     white-space:nowrap;z-index:3}
+  .title-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .btn-fav{padding:3px 10px;font-size:12.5px}
+  .btn-fav[aria-pressed="true"]{color:var(--c-trust);border-color:var(--c-trust)}
+  .acct{display:flex;align-items:center;gap:8px;min-height:32px}
+  .acct img{width:26px;height:26px;border-radius:50%;object-fit:cover}
+  .acct-name{font-size:12.5px;color:var(--ink-2);max-width:9em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .acct-msg{font-size:11.5px;color:var(--c-up)}
   .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:-8px 0 16px;font-size:12px;color:var(--ink-3)}
   .chips button{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
     border-radius:99px;padding:3px 11px;font:inherit;font-size:12.5px;cursor:pointer}
@@ -175,7 +184,10 @@
 
   <header>
     <div>
-      <h1 id="title">個股籌碼監控</h1>
+      <div class="title-row">
+        <h1 id="title">個股籌碼監控</h1>
+        <button class="btn btn-fav" id="btn-fav" hidden aria-pressed="false">☆ 加入自選</button>
+      </div>
       <div class="sub" id="meta">載入中…</div>
     </div>
     <div class="controls">
@@ -211,10 +223,24 @@
         <span class="ctrl-label">&nbsp;</span>
         <button class="btn" id="btn-theme" aria-label="切換深淺色">淺色</button>
       </div>
+      <!-- Shown only where the site has accounts (the deployed Pages project
+           with its Functions); a local or file:// copy simply has none. -->
+      <div id="account" hidden>
+        <span class="ctrl-label">帳號</span>
+        <div class="acct">
+          <div id="gsi"></div>
+          <span class="acct" id="acct-user" hidden>
+            <img id="acct-pic" alt="" referrerpolicy="no-referrer">
+            <span class="acct-name" id="acct-name"></span>
+            <button class="btn" id="btn-logout">登出</button>
+          </span>
+          <span class="acct-msg" id="acct-msg" role="status" aria-live="polite"></span>
+        </div>
+      </div>
     </div>
   </header>
 
-  <!-- The watchlist (stocks.txt), one click each; these also carry broker data. -->
+  <!-- The signed-in user's own list (自選), one click each. -->
   <div class="chips" id="chips" hidden></div>
 
   <div id="app" hidden>
@@ -270,7 +296,7 @@
       <p><strong>主力買賣超</strong> = 當期買超前 15 名券商分點合計 − 賣超前 15 名合計（富邦 e-Broker 定義）；
       日序列以每日分點表回補整段期間。選擇過去日期時，近 1 日分點顯示當天資料，近 5/20/60 日統計只提供最新交易日。<strong>大戶</strong> = 集保持股 &gt; 400 張者，
       提示框另列 &gt; 1000 張。</p>
-      <p>資料來源：臺灣證券交易所（個股日成交、三大法人買賣超 T86、融資融券彙總）、
+      <p>資料來源：臺灣證券交易所與證券櫃檯買賣中心（每日收盤行情、三大法人買賣超、融資融券餘額）、
       神秘金字塔 norway.twsthr.info（集保股權分散）、富邦 e-Broker（主力進出）。
       缺漏以斷點呈現，不以 0 補值。本頁僅描述已發生的籌碼變化，不構成投資建議。</p>
     </footer>
@@ -340,21 +366,16 @@
 
   // ── Stock search ──────────────────────────────────────────
   // Every built stock is searchable by code or name; the datalist gives the
-  // browser's own suggestion dropdown. Watchlist stocks are also chips.
+  // browser's own suggestion dropdown.
   const q = document.getElementById('q'), qMsg = document.getElementById('q-msg');
   const label = s => `${s.code} ${s.name||''}`.trim();
+  const mkt = s => s.exchange === 'TPEx' ? '上櫃' : '上市';
   document.getElementById('stock-options').innerHTML =
-    LIST.map(s=>`<option value="${label(s)}"></option>`).join('');
-  const tracked = LIST.filter(s=>s.tracked);
+    LIST.map(s=>`<option value="${label(s)}" label="${mkt(s)}"></option>`).join('');
   const chips = document.getElementById('chips');
-  if(tracked.length){
-    chips.hidden = false;
-    chips.innerHTML = '追蹤清單' + tracked.map(s=>
-      `<button data-code="${s.code}" aria-pressed="false">${label(s)}</button>`).join('');
-    chips.addEventListener('click', e=>{
-      const b = e.target.closest('button'); if(b) pickStock(b.dataset.code);
-    });
-  }
+  chips.addEventListener('click', e=>{
+    const b = e.target.closest('button'); if(b) pickStock(b.dataset.code);
+  });
   // "2330", "2330 台積電", "台積電", "台積" all resolve; codes win over names.
   function resolve(text){
     const t = text.trim().toUpperCase();
@@ -376,7 +397,7 @@
   function submitSearch(){
     const hit = resolve(q.value);
     if(hit){ pickStock(hit.code); q.blur(); }
-    else if(q.value.trim()) qMsg.textContent = `找不到「${q.value.trim()}」（僅上市股票與 ETF）`;
+    else if(q.value.trim()) qMsg.textContent = `找不到「${q.value.trim()}」（上市櫃股票與 ETF）`;
   }
   q.addEventListener('change', submitSearch);
   q.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); submitSearch(); } });
@@ -574,7 +595,7 @@
       backgroundColor:'transparent', animation:false,
       textStyle:{fontFamily:'Inter, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif'},
       title: L.grids.map((g,i)=>({text: i===P.INST ? instTitle()
-          : i===P.MAIN && !S.stock.tracked ? g.name + ' · 僅追蹤清單' : g.name, left:L.narrow?8:L.left+4, top:g.top-(L.narrow?19:17),
+          : i===P.MAIN && !S.stock.tracked ? g.name + ' · 此股未提供' : g.name, left:L.narrow?8:L.left+4, top:g.top-(L.narrow?19:17),
         textStyle:{color:COLORS.ink3, fontSize:L.narrow?10:11.5, fontWeight:500}})),
       grid: L.grids.map(g=>({left:L.left, right:L.right, top:g.top, height:g.height})),
       xAxis: all.map(i=>({
@@ -662,8 +683,8 @@
     const b = brokersFor();
     const box = document.getElementById('brokers'), sum = document.getElementById('br-sum');
     if(!S.stock.tracked && !b){
-      sum.innerHTML = '<span class="muted">主力進出與券商分點只提供追蹤清單中的股票：把代號加入 ' +
-        '<code>stocks.txt</code> 後執行 <code>python3 fetch_stocks.py</code>。</span>';
+      sum.innerHTML = '<span class="muted">這檔股票沒有主力進出與券商分點資料：這兩項需逐檔逐日抓取，' +
+        '目前只提供部分股票。</span>';
       box.innerHTML = '';
       return;
     }
@@ -699,11 +720,11 @@
       if(!S.rows.length) throw new Error('empty');
       const entry = LIST.find(s=>s.code===code);
       q.value = label(entry || stock);
-      chips.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b.dataset.code===code ? 'true' : 'false'));
+      renderChips(); syncFav();
       document.getElementById('title').textContent = `${stock.code} ${stock.name}`;
       document.title = `${stock.code} ${stock.name} · 個股籌碼監控`;
       document.getElementById('meta').textContent =
-        `${fd(stock.start)} – ${fd(stock.end)} · ${S.rows.length} 個交易日 · 更新於 ${stock.generatedAt.replace('T',' ')}`;
+        `${mkt(stock)} · ${fd(stock.start)} – ${fd(stock.end)} · ${S.rows.length} 個交易日 · 更新於 ${stock.generatedAt.replace('T',' ')}`;
       sel = S.rows.length - 1;
       syncDate();
       renderKpis(); renderChart(); renderBrokers();
@@ -813,6 +834,108 @@
       if(dz) chart.dispatchAction({type:'dataZoom', startValue:dz.startValue, endValue:dz.endValue});
     }
   });
+
+  // ── Account: Google sign-in + 自選 list ─────────────────────
+  // Talks to the Pages Functions under /api (lib/account.mjs). Anywhere they
+  // don't exist (./run.sh, file://) the account UI just stays hidden.
+  const acct = {enabled:false, user:null, favs:[]};
+  const acctMsg = document.getElementById('acct-msg');
+  const api = (path, opts={}) => fetch('api/' + path, {credentials:'same-origin', ...opts,
+    headers:{'Content-Type':'application/json', ...(opts.headers||{})}});
+
+  function renderChips(){
+    const on = !!acct.user;
+    chips.hidden = !on;
+    if(!on) return;
+    const cur = S && S.stock.code;
+    chips.innerHTML = '自選' + (acct.favs.length
+      ? acct.favs.map(c=>{
+          const s = LIST.find(x=>x.code===c) || {code:c};
+          return `<button data-code="${c}" aria-pressed="${c===cur}">${label(s)}</button>`;
+        }).join('')
+      : '<span class="muted">按標題旁的 ☆ 把股票加入自選</span>');
+  }
+  function syncFav(){
+    const b = document.getElementById('btn-fav');
+    b.hidden = !acct.enabled || !S;
+    const on = !!(S && acct.favs.includes(S.stock.code));
+    b.textContent = on ? '★ 已自選' : '☆ 加入自選';
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+  function setUser(data){
+    acct.user = data ? data.user : null;
+    acct.favs = data ? data.favourites || [] : [];
+    document.getElementById('gsi').hidden = !!acct.user;
+    document.getElementById('acct-user').hidden = !acct.user;
+    if(acct.user){
+      document.getElementById('acct-name').textContent = acct.user.name || acct.user.email || '';
+      const pic = document.getElementById('acct-pic');
+      pic.hidden = !acct.user.picture;
+      if(acct.user.picture) pic.src = acct.user.picture;
+    }
+    acctMsg.textContent = '';
+    renderChips(); syncFav();
+  }
+  function loadGoogleButton(clientId){
+    const draw = () => {
+      google.accounts.id.initialize({client_id:clientId, callback:onGoogleCredential});
+      google.accounts.id.renderButton(document.getElementById('gsi'), {
+        theme: document.documentElement.dataset.theme === 'light' ? 'outline' : 'filled_black',
+        size:'medium', text:'signin_with', shape:'pill', locale:'zh-TW'});
+    };
+    if(window.google && google.accounts) return draw();
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true; s.onload = draw;
+    s.onerror = () => { acctMsg.textContent = '無法載入 Google 登入'; };
+    document.head.appendChild(s);
+  }
+  async function onGoogleCredential(resp){
+    try {
+      const r = await api('login', {method:'POST', body:JSON.stringify({credential:resp.credential})});
+      if(!r.ok) throw new Error();
+      setUser(await r.json());
+    } catch { acctMsg.textContent = '登入失敗，請再試一次'; }
+  }
+  async function initAccount(){
+    try {
+      if(typeof fetch !== 'function') return;
+      const cfg = await (await api('config')).json();
+      if(!cfg.accounts || !cfg.googleClientId) return;
+      acct.enabled = true;
+      document.getElementById('account').hidden = false;
+      const r = await api('me');
+      if(r.ok) setUser(await r.json());
+      else { setUser(null); loadGoogleButton(cfg.googleClientId); }
+    } catch { /* no API here: stay a plain static page */ }
+    syncFav();
+  }
+  document.getElementById('btn-fav').addEventListener('click', async ()=>{
+    if(!S) return;
+    if(!acct.user){ acctMsg.textContent = '請先登入再加入自選'; return; }
+    const code = S.stock.code, before = acct.favs.slice();
+    acct.favs = acct.favs.includes(code) ? acct.favs.filter(c=>c!==code) : [...acct.favs, code];
+    renderChips(); syncFav();                    // optimistic; undone on failure
+    try {
+      const r = await api('favourites', {method:'PUT', body:JSON.stringify({codes:acct.favs})});
+      if(!r.ok) throw new Error();
+      acct.favs = (await r.json()).favourites;
+    } catch {
+      acct.favs = before;
+      acctMsg.textContent = '自選儲存失敗';
+    }
+    renderChips(); syncFav();
+  });
+  document.getElementById('btn-logout').addEventListener('click', async ()=>{
+    try { await api('logout', {method:'POST', body:'{}'}); } catch {}
+    if(window.google && google.accounts) google.accounts.id.disableAutoSelect();
+    setUser(null);
+    try {
+      const cfg = await (await api('config')).json();
+      if(cfg.googleClientId) loadGoogleButton(cfg.googleClientId);
+    } catch {}
+  });
+  initAccount();
 
   const want = location.hash.slice(1);
   const has_ = c => LIST.some(s=>s.code===c);

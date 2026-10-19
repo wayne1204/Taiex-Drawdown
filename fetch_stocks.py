@@ -2,24 +2,25 @@
 """
 Single-stock monitor - data fetcher
 
-Builds a daily series for EVERY TWSE-listed stock and ETF (about 1,300), plus
-richer broker data for the stocks on the watchlist (stocks.txt):
+Builds a daily series for EVERY listed (TWSE) and OTC (TPEx) stock and ETF
+(about 2,200), plus richer broker data for the stocks on the watchlist
+(stocks.txt):
 
-  Every stock
-  1. Daily OHLC + volume       TWSE MI_INDEX            (whole market, single day)
-  2. Institutional net         TWSE T86                 (whole market, single day)
-  3. Margin balance / change   TWSE MI_MARGN ALL        (whole market, single day)
-  4. Shareholder distribution  norway.twsthr.info       (per stock, weekly history)
+  Every stock                  TWSE (上市)          TPEx (上櫃)       per
+  1. Daily OHLC + volume       MI_INDEX             afterTrading/otc  day, whole market
+  2. Institutional net         T86                  insti/dailyTrade  day, whole market
+  3. Margin balance / change   MI_MARGN ALL         margin/balance    day, whole market
+  4. Shareholder distribution  norway.twsthr.info (both markets)      stock, weekly
 
   Watchlist stocks only (one request per stock per session - too many for all)
   5. Main-force net + brokers  fubon-ebrokerdj (DJ)     (series, daily tables, windows)
 
-The three whole-market queries cost three requests a day however many stocks
-are built; they are cached slimmed down to the columns read back. The trading
+The whole-market queries cost six requests a day (three per exchange) however
+many stocks are built; they are cached slimmed down to the columns read back. The trading
 calendar comes from the TAIEX months fetch_data.py already caches. Shareholder
 pages are refreshed once a week (TDCC publishes weekly), so a normal nightly
-run is three TWSE requests plus the watchlist's broker pages; the first run
-after each Saturday also walks every stock's shareholder page (~45 min).
+run is six exchange requests plus the watchlist's broker pages; the first run
+after each Saturday also walks every stock's shareholder page (~75 min).
 
 Outputs:
   data/stocks/<code>.js     one stock, as window.STOCK_DATA[code] (works over file://)
@@ -31,9 +32,6 @@ Usage:
   python3 fetch_stocks.py --stocks 2327,2330  # just these, with broker data
   python3 fetch_stocks.py --months 24         # deeper history (default 12)
   python3 fetch_stocks.py --rebuild           # no requests; cache only
-
-Only TWSE-listed securities are covered: TPEx (OTC) stocks are not in MI_INDEX,
-T86 or MI_MARGN.
 
 Note: Chinese string literals below are matched against response payloads
 (column headers, page labels). They are data and must not be translated.
@@ -73,6 +71,8 @@ LOTS = 1000  # shares per lot (張)
 # (01xxxT), which have no shareholder or institutional coverage worth a page.
 UNIVERSE_RE = re.compile(r"\d{4}|00\d{2,4}[A-Z]?")
 
+TPEX_BASE = "https://www.tpex.org.tw/www/zh-tw"
+
 
 # --------------------------------------------------------------------------
 # Watchlist
@@ -94,6 +94,17 @@ def read_watchlist(path=WATCHLIST):
 # --------------------------------------------------------------------------
 # TWSE: whole-market daily tables, slimmed before caching
 # --------------------------------------------------------------------------
+
+def _slim_result(rows, **extra):
+    """
+    A whole-market table with no rows is "no data", not a final answer: TPEx
+    replies stat "ok" with an empty table for a day it has not published yet.
+    Marking it _empty lets fetch() cache it as such and ask again (is_stale).
+    """
+    if not rows:
+        return {"stat": "OK", "_empty": True}
+    return {"stat": "OK", "rows": rows, **extra}
+
 
 def _col(fields, test):
     for i, name in enumerate(fields):
@@ -127,7 +138,7 @@ def slim_t86(payload):
         if f is not None and fdlr is not None:
             f += fdlr
         rows[code] = [f, num(trust), num(dealer)]
-    return {"stat": "OK", "rows": rows}
+    return _slim_result(rows)
 
 
 def slim_margin(payload):
@@ -144,7 +155,7 @@ def slim_margin(payload):
             if prev_i is None or bal_i is None or len(r) <= bal_i:
                 continue
             rows[str(r[0]).strip()] = [fd.parse_num(r[prev_i]), fd.parse_num(r[bal_i])]
-    return {"stat": "OK", "rows": rows}
+    return _slim_result(rows)
 
 
 def fetch_t86_day(ymd, rebuild_only=False):
@@ -183,7 +194,7 @@ def slim_quotes(payload):
                           round(shares / LOTS) if shares is not None else None]
             if "證券名稱" in ix:
                 names[code] = str(r[ix["證券名稱"]]).strip()
-    return {"stat": "OK", "rows": rows, "names": names}
+    return _slim_result(rows, names=names)
 
 
 def fetch_quotes_day(ymd, rebuild_only=False):
@@ -191,6 +202,87 @@ def fetch_quotes_day(ymd, rebuild_only=False):
                  {"date": ymd, "type": "ALLBUT0999", "response": "json"},
                  ymd, rebuild_only, slim=slim_quotes)
     return (p or {}).get("rows") or {}, (p or {}).get("names") or {}
+
+
+# --------------------------------------------------------------------------
+# TPEx (上櫃): the same three whole-market tables, slimmed to the same shapes
+# --------------------------------------------------------------------------
+
+def _tpex_date(ymd):
+    return f"{ymd[:4]}/{ymd[4:6]}/{ymd[6:]}"
+
+
+def _tpex_table(payload):
+    for t in payload.get("tables") or []:
+        if t.get("data"):
+            return [str(f).strip() for f in t.get("fields") or []], t["data"]
+    return [], []
+
+
+def slim_tpex_quotes(payload):
+    """afterTrading/otc (regular session, fixed-price trades excluded, like MI_INDEX)."""
+    fields, data = _tpex_table(payload)
+    ix = {k: _col(fields, lambda f, k=k: f.startswith(k))
+          for k in ("代號", "名稱", "開盤", "最高", "最低", "收盤", "成交股數")}
+    rows, names = {}, {}
+    if None in ix.values():
+        return _slim_result(rows)
+    for r in data:
+        code = str(r[ix["代號"]]).strip()
+        shares = fd.parse_num(r[ix["成交股數"]])
+        rows[code] = [fd.parse_num(r[ix[k]]) for k in ("開盤", "最高", "最低", "收盤")] + [
+            round(shares / LOTS) if shares is not None else None]
+        names[code] = str(r[ix["名稱"]]).strip()
+    return _slim_result(rows, names=names)
+
+
+# insti/dailyTrade repeats 買進/賣出/買賣超股數 under group headers the JSON
+# does not carry, so its net columns are taken by position. The layout:
+#   2-4 外資及陸資(不含外資自營商)  5-7 外資自營商  8-10 外資及陸資合計
+#   11-13 投信  14-16 自營商(自行買賣)  17-19 自營商(避險)  20-22 自營商合計
+#   23 三大法人買賣超股數合計
+# and is checked by arithmetic on every row: the three nets must add up to
+# column 23, or the row is skipped.
+TPEX_INST_COLS = {"foreign": 10, "trust": 13, "dealer": 22, "total": 23}
+
+
+def slim_tpex_inst(payload):
+    fields, data = _tpex_table(payload)
+    rows = {}
+    if len(fields) != 24 or not fields[23].startswith("三大法人"):
+        return _slim_result(rows)
+    for r in data:
+        v = {k: fd.parse_num(r[i]) for k, i in TPEX_INST_COLS.items()}
+        parts = [v["foreign"], v["trust"], v["dealer"]]
+        if None not in parts and v["total"] is not None and abs(sum(parts) - v["total"]) > 1:
+            continue
+        rows[str(r[0]).strip()] = parts
+    return _slim_result(rows)
+
+
+def slim_tpex_margin(payload):
+    """margin/balance -> {code: [prev_balance, balance]} in lots, like slim_margin."""
+    fields, data = _tpex_table(payload)
+    prev_i = _col(fields, lambda f: f.startswith("前資餘額"))
+    bal_i = _col(fields, lambda f: f == "資餘額")
+    rows = {}
+    if prev_i is not None and bal_i is not None:
+        for r in data:
+            rows[str(r[0]).strip()] = [fd.parse_num(r[prev_i]), fd.parse_num(r[bal_i])]
+    return _slim_result(rows)
+
+
+def fetch_tpex_day(ymd, rebuild_only=False):
+    """-> (quotes, names, inst, margin) for one session, shaped like the TWSE ones."""
+    d = _tpex_date(ymd)
+    q = fd.fetch("TPEX_QUOTES", "afterTrading/otc", {"date": d, "type": "EW", "response": "json"},
+                 ymd, rebuild_only, slim=slim_tpex_quotes, base=TPEX_BASE) or {}
+    i = fd.fetch("TPEX_INST", "insti/dailyTrade",
+                 {"type": "Daily", "sect": "AL", "date": d, "response": "json"},
+                 ymd, rebuild_only, slim=slim_tpex_inst, base=TPEX_BASE) or {}
+    m = fd.fetch("TPEX_MARGIN", "margin/balance", {"date": d, "response": "json"},
+                 ymd, rebuild_only, slim=slim_tpex_margin, base=TPEX_BASE) or {}
+    return q.get("rows") or {}, q.get("names") or {}, i.get("rows") or {}, m.get("rows") or {}
 
 
 # --------------------------------------------------------------------------
@@ -415,7 +507,7 @@ def holders_fresh_since(today=None):
     return (today - timedelta(days=(today.weekday() - 5) % 7)).isoformat()
 
 
-def build_stock(code, name, days, market, tracked, rebuild_only=False):
+def build_stock(code, name, days, market, tracked, rebuild_only=False, exchange="TWSE"):
     """
     market: {date: (quotes, t86_rows, margin_rows)} shared across stocks.
     `tracked` adds the per-stock broker data (main force, broker tables).
@@ -476,6 +568,7 @@ def build_stock(code, name, days, market, tracked, rebuild_only=False):
 
     return {
         "code": code, "name": name or prev.get("name") or code, "tracked": tracked,
+        "exchange": exchange,
         "generatedAt": datetime.now().isoformat(timespec="seconds"),
         "start": days[0], "end": days[-1],
         "daily": daily, "holders": holders, "brokers": brokers,
@@ -503,7 +596,8 @@ def write_index(watchlist):
         s = load_previous(code)
         if s:
             entries.append({"code": code, "name": s.get("name"), "end": s.get("end"),
-                            "tracked": code in watchlist})
+                            "tracked": code in watchlist,
+                            "exchange": s.get("exchange", "TWSE")})
     with open(os.path.join(OUT_DIR, "index.js"), "w", encoding="utf-8") as f:
         f.write("window.STOCK_LIST=" + json.dumps(entries, ensure_ascii=False,
                                                   separators=(",", ":")) + ";\n")
@@ -544,16 +638,22 @@ def main():
     calendar = sorted(calendar)
     if not calendar:
         raise SystemExit("ERROR: no trading days retrieved; aborting.")
-    print(f"  {len(calendar)} trading days; quotes + institutional + margin, "
-          "three whole-market queries per day")
+    print(f"  {len(calendar)} trading days; quotes + institutional + margin from "
+          "TWSE and TPEx, six whole-market queries per day")
 
-    market, names = {}, {}
+    # Both exchanges share the trading calendar, and a code is listed on only
+    # one of them, so their tables merge into one dict per day.
+    market, names, otc = {}, {}, set()
     for i, d in enumerate(calendar, 1):
         ymd = d.replace("-", "")
         quotes, nm = fetch_quotes_day(ymd, args.rebuild)
+        tq, tnm, tinst, tmg = fetch_tpex_day(ymd, args.rebuild)
         names.update(nm)                     # later days win: current names
-        market[d] = (quotes, fetch_t86_day(ymd, args.rebuild),
-                     fetch_margin_all_day(ymd, args.rebuild))
+        names.update(tnm)
+        otc.update(tq)
+        market[d] = ({**quotes, **tq},
+                     {**fetch_t86_day(ymd, args.rebuild), **tinst},
+                     {**fetch_margin_all_day(ymd, args.rebuild), **tmg})
         if i % 25 == 0 or i == len(calendar):
             print(f"  {d}  {i}/{len(calendar)}  {(time.time() - t0) / 60:.1f} min", flush=True)
 
@@ -574,15 +674,14 @@ def main():
     for i, code in enumerate(codes, 1):
         try:
             s = build_stock(code, names.get(code), calendar, market, code in tracked,
-                            args.rebuild)
+                            args.rebuild, exchange="TPEx" if code in otc else "TWSE")
         except Exception as e:  # noqa: BLE001 - one bad page must not sink the run
             failed += 1
             print(f"  !! {code} failed: {e}", file=sys.stderr)
             continue
         if s is None:
             if code in tracked:
-                print(f"  !! {code}: no TWSE quotes in range (TPEx stocks are not supported)",
-                      file=sys.stderr)
+                print(f"  !! {code}: no TWSE or TPEx quotes in range", file=sys.stderr)
             continue
         write_stock(s)
         built += 1
