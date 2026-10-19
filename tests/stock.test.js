@@ -58,7 +58,7 @@ function fixture() {
                                 { code: "8888", name: "另一檔", end: stock.end, tracked: false }] };
 }
 
-function buildHtml({ stock, other, list }) {
+function buildHtml({ stock, other, list }, apiStub = "") {
   let html = read("stock.html");
   const STUB = `<script>
     HTMLCanvasElement.prototype.getContext = function(){
@@ -73,7 +73,7 @@ function buildHtml({ stock, other, list }) {
     HTMLElement.prototype.getBoundingClientRect = function(){ var s=size(this);
       return {width:s.w,height:s.h,top:0,left:0,right:s.w,bottom:s.h,x:0,y:0}; };
   </script>`;
-  html = html.replace("<title>", STUB + "<title>");
+  html = html.replace("<title>", STUB + apiStub + "<title>");
   html = html.replace(/<script src="https:\/\/cdn[^"]*"><\/script>/,
     `<script>${fs.readFileSync(require.resolve("echarts/dist/echarts.min.js"), "utf8")}</script>`);
   html = html.replace('<script src="data/stocks/index.js"></script>',
@@ -192,21 +192,86 @@ module.exports = {
       const q = doc.getElementById("q");
       const search = v => { q.value = v; q.dispatchEvent(new window.Event("change")); };
       t.eq("search box shows the stock", q.value, "9999 測試股");
-      t.eq("watchlist chip rendered", [...doc.querySelectorAll("#chips button")].map(b => b.dataset.code), ["9999"]);
+      t.ok("no API here: account UI, 自選 chips and ☆ stay hidden",
+        doc.getElementById("account").hidden && doc.getElementById("chips").hidden &&
+        doc.getElementById("btn-fav").hidden);
       search("另一");
       await sleep(50);
       t.eq("a partial name finds the stock", doc.getElementById("title").textContent, "8888 另一檔");
       t.eq("an explicit pick goes into the URL", window.location.hash, "#8888");
-      t.ok("off-watchlist stock explains missing broker data",
-        /追蹤清單/.test(doc.getElementById("br-sum").textContent));
+      t.ok("stock without broker data says so",
+        /沒有主力進出/.test(doc.getElementById("br-sum").textContent));
       search("不存在的股票");
       t.ok("no match says so and keeps the stock", /找不到/.test(doc.getElementById("q-msg").textContent) &&
         doc.getElementById("title").textContent === "8888 另一檔");
-      doc.querySelector('#chips button[data-code="9999"]').click();
+      search("9999");
       await sleep(50);
-      t.eq("chip switches back", doc.getElementById("title").textContent, "9999 測試股");
+      t.eq("a code finds the stock", doc.getElementById("title").textContent, "9999 測試股");
     } finally {
       window.close();
     }
+
+    await accountFlow(t, fx);
   }
 };
+
+/**
+ * The page against a stubbed /api: what lib/account.mjs answers, recorded so
+ * the requests themselves can be checked. jsdom has no fetch, so the stub is
+ * the only one.
+ */
+async function accountFlow(t, fx) {
+  const { JSDOM, VirtualConsole } = require("jsdom");
+  const errors = [];
+  const vc = new VirtualConsole();
+  vc.on("jsdomError", e => errors.push(e.message));
+  const API = `<script>
+    window.__api = { signedIn: true, favs: ["8888"], calls: [] };
+    window.fetch = async function(url, o) {
+      o = o || {};
+      const A = window.__api, path = String(url).split("api/").pop();
+      A.calls.push({ path, method: o.method || "GET", body: o.body });
+      const res = (status, body) => ({ ok: status < 300, status, json: async () => body });
+      if (path === "config") return res(200, { accounts: true, googleClientId: "cid" });
+      if (path === "me") return A.signedIn ? res(200, { user: { name: "Ann", email: "a@x" }, favourites: A.favs })
+                                           : res(401, { error: "not signed in" });
+      if (path === "favourites") { A.favs = JSON.parse(o.body).codes; return res(200, { favourites: A.favs }); }
+      if (path === "logout") { A.signedIn = false; return res(200, { ok: true }); }
+      return res(404, {});
+    };
+  </script>`;
+  const dom = new JSDOM(buildHtml(fx, API), { runScripts: "dangerously", pretendToBeVisual: true,
+    virtualConsole: vc, url: "http://localhost/stock.html" });
+  const { window } = dom, doc = window.document;
+  const chipCodes = () => [...doc.querySelectorAll("#chips button")].map(b => b.dataset.code);
+  try {
+    await sleep(1200);
+    t.ok("[account] no errors", errors.length === 0, errors.slice(0, 3).join(" || ") || "clean");
+    t.ok("[account] signed in: name shown, sign-in button hidden",
+      !doc.getElementById("account").hidden && doc.getElementById("acct-name").textContent === "Ann" &&
+      doc.getElementById("gsi").hidden);
+    t.eq("[account] chips are the user's own list, not stocks.txt", chipCodes(), ["8888"]);
+    const fav = doc.getElementById("btn-fav");
+    t.eq("[account] ☆ for a stock not in the list", [fav.hidden, fav.textContent], [false, "☆ 加入自選"]);
+    fav.click();
+    await sleep(50);
+    const put = window.__api.calls.filter(c => c.path === "favourites").pop();
+    t.eq("[account] ☆ saves the list with this stock added", put && JSON.parse(put.body), { codes: ["8888", "9999"] });
+    t.eq("[account] button and chips follow", [fav.textContent, chipCodes()], ["★ 已自選", ["8888", "9999"]]);
+    doc.querySelector('#chips button[data-code="8888"]').click();
+    await sleep(50);
+    t.eq("[account] a chip opens its stock", doc.getElementById("title").textContent, "8888 另一檔");
+    fav.click();
+    await sleep(50);
+    t.eq("[account] ★ removes it again", chipCodes(), ["9999"]);
+    doc.getElementById("btn-logout").click();
+    await sleep(50);
+    t.ok("[account] logout hides the list and asks to sign in",
+      doc.getElementById("chips").hidden && doc.getElementById("acct-user").hidden && !doc.getElementById("gsi").hidden);
+    fav.click();
+    t.ok("[account] ☆ while signed out asks to sign in first",
+      /請先登入/.test(doc.getElementById("acct-msg").textContent));
+  } finally {
+    window.close();
+  }
+}

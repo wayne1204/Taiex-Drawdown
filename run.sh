@@ -19,7 +19,10 @@
 #                     where `wrangler login` has been run.
 #
 # Deploy uploads only the files the pages load (plus stock.html and
-# data/stocks/*.js once fetch_stocks.py has run), staged into a temp dir:
+# data/stocks/*.js once fetch_stocks.py has run), staged into a temp dir.
+# wrangler also compiles ./functions (the account API, see README) from the
+# repo root, where this script runs; its D1 binding and GOOGLE_CLIENT_ID are
+# set once in the Pages project settings.
 # data/raw/, fetch.log, tests and notes never leave this machine. The project
 # is created on first deploy. Safe to call from cron via update_data.sh --deploy.
 
