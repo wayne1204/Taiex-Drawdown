@@ -342,7 +342,7 @@
         <div class="ep-nav" role="group" aria-label="切換修正波段">
           <h2>加權指數</h2>
           <button class="btn btn-sm" id="ep-prev" aria-label="上一波">‹</button>
-          <span class="ep-label num" id="ep-label" aria-live="polite">全部期間</span>
+          <span class="ep-label num" id="ep-label" aria-live="polite">共 0 波</span>
           <button class="btn btn-sm" id="ep-next" aria-label="下一波">›</button>
           <button class="btn btn-sm" id="ep-clear" hidden>顯示全部</button>
         </div>
@@ -538,6 +538,14 @@
   // setOption — without it, notMerge:true would silently reset the view to the
   // full range every time the chart is rebuilt.
   let zoomRange = null;   // null = show everything
+  // The view the page opens on: the latest calendar year of sessions. Selecting
+  // an episode zooms to it; deselecting it (顯示全部) shows the full range.
+  function latestYear(){
+    const from = new Date(dates[N-1]);
+    from.setUTCFullYear(from.getUTCFullYear() - 1);
+    const s = dates.findIndex(d => d > from.toISOString().slice(0,10));
+    return s > 0 ? {s, e:N-1} : null;
+  }
 
   // ECharts candlestick wants [open, close, low, high] — note that order.
   const ohlc = rows.map(r =>
@@ -838,7 +846,7 @@
     const e = episodes[selected];
     document.getElementById('ep-label').textContent = e
       ? `#${selected+1} / ${episodes.length} · ${fd(e.peakDate)}`
-      : `全部期間 · ${episodes.length} 波`;
+      : `共 ${episodes.length} 波`;
     document.getElementById('ep-prev').disabled = !episodes.length || selected === 0;
     document.getElementById('ep-next').disabled = !episodes.length || selected === episodes.length-1;
     document.getElementById('ep-clear').hidden = !e;
@@ -1362,9 +1370,10 @@
     // keeping a window anchored to an episode that no longer exists leaves the
     // user in an unexplained 100-session view with no highlighted row to explain
     // it, and the flow panel still rebased to that vanished episode's start.
+    // Back to the opening view instead.
     selected = -1;
-    zoomRange = null;
-    setCumBase(0);
+    zoomRange = latestYear();
+    setCumBase(zoomRange ? zoomRange.s : 0);
     renderKpis(); renderContext(); renderChart(); renderOverlay(); renderTable();
   }
 

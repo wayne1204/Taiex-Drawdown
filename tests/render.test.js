@@ -282,7 +282,12 @@ module.exports = {
              EPS.length, doc.querySelectorAll("#tbody tr").length);
         const rowAt = n => doc.querySelectorAll("#tbody tr")[n]; // re-query: tbody is replaced wholesale on every render
 
-        const full = zoomOf(chart);
+        const N = window.TAIEX_DATA.length;
+        const opening = zoomOf(chart);
+        t.ok("opens on the latest year (~1 calendar year of sessions, ending today)",
+          opening.e === N - 1 && spanOf(opening) >= 230 && spanOf(opening) <= 260,
+          `[${opening.s}, ${opening.e}] of ${N}: ${window.TAIEX_DATA[opening.s].date} → ${window.TAIEX_DATA[opening.e].date}`);
+        const full = { s: 0, e: N - 1 };
         const target = rowAt(0);
         // The table may be sorted by now, so the first visible row is not
         // necessarily episode 0 — trust data-i, not row position.
