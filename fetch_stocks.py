@@ -30,7 +30,7 @@ Usage:
   python3 fetch_stocks.py                     # whole market + watchlist extras
   python3 fetch_stocks.py --watchlist-only    # just stocks.txt (fast)
   python3 fetch_stocks.py --stocks 2327,2330  # just these, with broker data
-  python3 fetch_stocks.py --months 24         # deeper history (default 12)
+  python3 fetch_stocks.py --months 36         # deeper history (default 24)
   python3 fetch_stocks.py --rebuild           # no requests; cache only
 
 Note: Chinese string literals below are matched against response payloads
@@ -51,7 +51,7 @@ import fetch_data as fd
 ROOT = fd.ROOT
 OUT_DIR = os.path.join(fd.DATA_DIR, "stocks")
 WATCHLIST = os.path.join(ROOT, "stocks.txt")
-DEFAULT_MONTHS = 12
+DEFAULT_MONTHS = 24
 
 HOLDERS_URL = "https://norway.twsthr.info/StockHolders.aspx?stock={code}"
 DJ_BASE = "https://fubon-ebrokerdj.fbs.com.tw"
