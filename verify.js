@@ -85,10 +85,12 @@ console.log("");
 // The spec's reference table starts in 2021, so compare like with like: only
 // episodes whose peak falls in 2021 or later. Pre-2021 episodes (incl. the 2020
 // COVID crash) are real, they are simply outside what that table enumerates.
+// Lower bound only: the table is a fixed list of 8, but every new correction
+// the market makes adds one, so an upper bound would fail on live data alone.
 const epsFrom2021 = eps.filter(e => e.peakDate >= "2021-01-01");
 const epsPre2021 = eps.filter(e => e.peakDate < "2021-01-01");
-check("episode count from 2021 near reference table (8 ±2)",
-      epsFrom2021.length >= 6 && epsFrom2021.length <= 10,
+check("episode count from 2021 covers the reference table (>= 6 of 8)",
+      epsFrom2021.length >= 6,
       `${epsFrom2021.length} episodes from 2021 (+${epsPre2021.length} in 2019-2020)`);
 
 // The 2022 bear market must collapse into ONE episode, not four or five.
