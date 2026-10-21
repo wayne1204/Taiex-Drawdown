@@ -10,6 +10,7 @@ data/stocks/
 
 # Build artifacts of the fetcher
 fetch.log
+fetch_stocks.log
 __pycache__/
 *.pyc
 
