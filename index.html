@@ -246,24 +246,28 @@
     .tbl-scroll{overflow-x:visible;border:0;background:transparent;border-radius:0}
     table{min-width:0;display:block}
     thead{display:none}
-    tbody,tr,td{display:block}
+    tbody{display:block}
+    /* Each episode is a compact card: #, 跌幅 and 期間 as its heading line,
+       then the other figures three to a row with the label above the value. */
     tr{
+      display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px 8px;
       background:var(--surface);border:1px solid var(--line);border-radius:10px;
-      padding:6px 12px;margin-bottom:10px}
+      padding:8px 12px 10px;margin-bottom:8px}
     tr[aria-selected="true"]{box-shadow:inset 3px 0 0 var(--c-up);background:var(--row-sel)}
     td{
-      display:flex;justify-content:space-between;align-items:baseline;gap:14px;
-      text-align:right;padding:5px 0;border-bottom:1px solid var(--line-2);white-space:normal}
-    td:last-child{border-bottom:0}
-    td::before{
-      content:attr(data-label);color:var(--ink-3);font-size:11.5px;
-      text-align:left;flex:0 0 auto}
-    /* The index column is the card's heading, not a row */
-    td:first-child{
-      text-align:left;font-weight:600;font-size:14px;color:var(--ink);
-      border-bottom:1px solid var(--line);padding-bottom:7px;margin-bottom:2px}
-    td:first-child::before{content:'修正 #';color:var(--ink-3);font-weight:400}
-    td.txt{text-align:right}
+      grid-column:span 2;display:flex;flex-direction:column;align-items:flex-start;gap:1px;
+      text-align:left;padding:0;border:0;white-space:nowrap;font-size:12.5px;line-height:1.35}
+    td::before{content:attr(data-label);color:var(--ink-3);font-size:10.5px}
+    td:nth-child(-n+2),td:nth-child(5){
+      flex-direction:row;align-items:baseline;
+      border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:1px}
+    td:nth-child(-n+2)::before,td:nth-child(5)::before{content:none}
+    td:first-child,td:nth-child(5){margin-right:-8px;padding-right:8px}   /* unbroken rule */
+    td:first-child{order:-3;grid-column:span 1;font-weight:600;font-size:14px;color:var(--ink)}
+    td:first-child::before{content:'#';color:var(--ink-3);font-weight:400}
+    td:nth-child(5){order:-2;font-weight:600;font-size:14px}
+    td:nth-child(2){order:-1;grid-column:span 3;justify-content:flex-end;font-size:12px;color:var(--ink-2)}
+    td.txt{text-align:left}
   }
 </style>
 </head>
