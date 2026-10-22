@@ -56,7 +56,9 @@ function fixture() {
   stock.tracked = true;
   // A whole-market stock off the watchlist: same series, no broker data
   const other = { ...stock, code: "8888", name: "另一檔", tracked: false, brokers: {}, brokerDaily: {},
-                  daily: daily.map(r => ({ ...r, mainForce: null })) };
+                  daily: daily.map(r => ({ ...r, mainForce: null })),
+                  // A 1:2 split before session 50: prices before it are halved on the chart
+                  adjustments: [{ date: daily[50].date, kind: "分割", before: 600, ref: 300, ratio: 2 }] };
   return { stock, other, list: [{ code: "9999", name: "測試股", end: stock.end, tracked: true },
                                 { code: "8888", name: "另一檔", end: stock.end, tracked: false }] };
 }
@@ -219,6 +221,14 @@ module.exports = {
       await sleep(50);
       t.eq("a partial name finds the stock", doc.getElementById("title").textContent, "8888 另一檔");
       t.eq("an explicit pick goes into the URL", window.location.hash, "#8888");
+      const k = chart.getOption().series.find(x => x.type === "candlestick");
+      const vol = chart.getOption().series.find(x => x.name === "成交量").data;
+      t.eq("a split rescales the sessions before it, not after",
+        [k.data[10][1], vol[10].value, k.data[60][1], vol[60].value],
+        [fx.stock.daily[10].close / 2, fx.stock.daily[10].volume * 2, fx.stock.daily[60].close, fx.stock.daily[60].volume]);
+      t.ok("the split is marked on the K panel and named in the subtitle",
+        k.markLine.data.length === 1 && /已還原 .* 分割（600\.00 → 參考價 300\.00）/.test(doc.getElementById("meta").textContent),
+        doc.getElementById("meta").textContent);
       t.ok("stock without broker data says so",
         /沒有主力進出/.test(doc.getElementById("br-sum").textContent));
       search("不存在的股票");

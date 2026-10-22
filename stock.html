@@ -464,8 +464,22 @@
   }
 
   // ── Derived series ────────────────────────────────────────
+  // A split or capital reduction resumes trading at a reference price, not
+  // the last close. Sessions before it are rescaled to today's terms (price
+  // ÷ close/reference, volume × the same), so the K chart has no cliff;
+  // each such row keeps the traded figures in `raw` for the tooltip.
+  function restore(s){
+    const ev = s.adjustments || [];
+    if(!ev.length) return s.daily;
+    const px = (v, f) => has(v) ? +(v / f).toFixed(4) : v;
+    return s.daily.map(r=>{
+      const f = ev.reduce((a,e)=> r.date < e.date ? a * e.ratio : a, 1);
+      return f === 1 ? r : {...r, open:px(r.open,f), high:px(r.high,f), low:px(r.low,f),
+        close:px(r.close,f), volume: has(r.volume) ? Math.round(r.volume * f) : r.volume, raw:r};
+    });
+  }
   function derive(s){
-    const rows = s.daily;
+    const rows = restore(s);
     const dates = rows.map(r=>r.date);
     const ma = n => rows.map((_,i)=>{
       if(i < n-1) return '-';
@@ -572,6 +586,8 @@
       ${li('高 / 低', `${nf(r.high,2)} / ${nf(r.low,2)}`)}
       ${li('漲跌', has(chg) ? `<span style="color:${colorOf(chg)}">${sgn(chg,2)} (${sgn(chg/p.close*100,2)}%)</span>` : '—')}
       ${li('成交量', nf(r.volume)+' 張')}
+      ${r.raw ? li('實際開 / 收（還原前）', `${nf(r.raw.open,2)} / ${nf(r.raw.close,2)}`) +
+                li('實際成交量', nf(r.raw.volume)+' 張') : ''}
       ${li('外資', sv(r.foreign), COLORS.foreign)}
       ${li('投信', sv(r.trust), COLORS.trust)}
       ${li('自營商', sv(r.dealer), COLORS.dealer)}
@@ -595,6 +611,12 @@
     name, type:'line', data, xAxisIndex:i, yAxisIndex:i, showSymbol:false, symbolSize:6,
     lineStyle:{width:extra.width||2, color}, itemStyle:{color}, ...extra
   });
+
+  // Where the prices before were rescaled: a labelled rule on the K panel.
+  const adjMarks = () => ({silent:true, symbol:'none', animation:false,
+    lineStyle:{color:COLORS.ink4, width:1, type:'dotted'},
+    label:{position:'insideEndTop', color:COLORS.ink3, fontSize:10, formatter:p=>p.name},
+    data:(S.stock.adjustments || []).map(e=>({name:e.kind, xAxis:e.date}))});
 
   // MA legend over the K panel, reading the selected session's values.
   // Clicking an entry hides or shows that line.
@@ -694,6 +716,7 @@
       ],
       series:[
         { name:'日K', type:'candlestick', data:S.ohlc, xAxisIndex:0, yAxisIndex:0, barMaxWidth:10,
+          markLine: adjMarks(),
           itemStyle:{color:COLORS.up, borderColor:COLORS.up, color0:COLORS.down, borderColor0:COLORS.down} },
         line('MA5',  S.ma5,  0, COLORS.ma5,  {width:1}),
         line('MA20', S.ma20, 0, COLORS.ma20, {width:1}),
@@ -781,7 +804,9 @@
       document.getElementById('title').textContent = `${stock.code} ${stock.name}`;
       document.title = `${stock.code} ${stock.name} · 個股籌碼監控`;
       document.getElementById('meta').textContent =
-        `${mkt(stock)} · ${fd(stock.start)} – ${fd(stock.end)} · ${S.rows.length} 個交易日 · 更新於 ${stock.generatedAt.replace('T',' ')}`;
+        `${mkt(stock)} · ${fd(stock.start)} – ${fd(stock.end)} · ${S.rows.length} 個交易日 · 更新於 ${stock.generatedAt.replace('T',' ')}` +
+        (stock.adjustments || []).map(e=>` · 已還原 ${fd(e.date)} ${e.kind}（${nf(e.before,2)} → 參考價 ${nf(e.ref,2)}` +
+          `${e.estimated ? '，依價格推算' : ''}）`).join('');
       sel = S.rows.length - 1;
       syncDate();
       renderKpis(); renderChart(); renderBrokers();

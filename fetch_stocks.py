@@ -43,6 +43,7 @@ Note: Chinese string literals below are matched against response payloads
 """
 
 import argparse
+import calendar as calendar_mod
 import html
 import json
 import os
@@ -249,6 +250,106 @@ def fetch_quotes_day(ymd, rebuild_only=False):
                  {"date": ymd, "type": "ALLBUT0999", "response": "json"},
                  ymd, rebuild_only, slim=slim_quotes)
     return (p or {}).get("rows") or {}, (p or {}).get("names") or {}
+
+
+# --------------------------------------------------------------------------
+# Price-scale events: a par-value change (split) or capital reduction halts a
+# stock and resumes it at a reference price that is not the last close. The
+# page rescales the sessions before each one by close / reference, so the K
+# chart has no cliff. TWSE lists both by resumption date; a month per request.
+# --------------------------------------------------------------------------
+
+ADJUST_SOURCES = {"TWTB8U": ("change/TWTB8U", "面額變更"),
+                  "TWTAUU": ("reducation/TWTAUU", "減資")}
+
+
+def slim_adjust(payload):
+    fields = [str(f).strip() for f in payload.get("fields") or []]
+    ix = {k: _col(fields, lambda f, k=k: f.startswith(k))
+          for k in ("恢復買賣日期", "股票代號", "停止買賣前收盤價格", "恢復買賣參考價")}
+    events = []
+    if None in ix.values():
+        return _slim_result(events)
+    for r in payload.get("data") or []:
+        y, m, d = str(r[ix["恢復買賣日期"]]).strip().split("/")
+        before, ref = fd.parse_num(r[ix["停止買賣前收盤價格"]]), fd.parse_num(r[ix["恢復買賣參考價"]])
+        if before and ref:
+            events.append([str(r[ix["股票代號"]]).strip(), f"{int(y) + 1911:04d}-{m}-{d}",
+                           before, ref])
+    return _slim_result(events)
+
+
+def fetch_adjustments(months, rebuild_only=False):
+    """{code: [{date, kind, before, ref, ratio}]} over `months` (YYYYMM)."""
+    out = {}
+    for src, (path, kind) in ADJUST_SOURCES.items():
+        for ym in months:
+            y, m = int(ym[:4]), int(ym[4:])
+            last = calendar_mod.monthrange(y, m)[1]
+            p = fd.fetch(src, path, {"startDate": f"{y:04d}{m:02d}01",
+                                     "endDate": f"{y:04d}{m:02d}{last:02d}", "response": "json"},
+                         f"{y:04d}{m:02d}", rebuild_only, slim=slim_adjust)
+            for code, d, before, ref in (p or {}).get("rows") or []:
+                out.setdefault(code, []).append({"date": d, "kind": kind, "before": before,
+                                                 "ref": ref, "ratio": round(before / ref, 6)})
+    for ev in out.values():
+        ev.sort(key=lambda e: e["date"])
+    return out
+
+
+def slim_reference(payload):
+    """MI_INDEX -> {"rows": {code: reference price}}: close minus the signed 漲跌價差."""
+    refs = {}
+    for t in payload.get("tables") or []:
+        fields = [str(f) for f in t.get("fields") or []]
+        if not {"證券代號", "收盤價", "漲跌(+/-)", "漲跌價差"} <= set(fields):
+            continue
+        ix = {k: fields.index(k) for k in ("證券代號", "收盤價", "漲跌(+/-)", "漲跌價差")}
+        for r in t.get("data") or []:
+            close, diff = fd.parse_num(r[ix["收盤價"]]), fd.parse_num(r[ix["漲跌價差"]])
+            sign = str(r[ix["漲跌(+/-)"]])
+            sign = -1 if "-" in sign else 1 if "+" in sign else 0 if diff == 0 else None
+            if close is not None and diff is not None and sign is not None:
+                refs[str(r[ix["證券代號"]]).strip()] = round(close - sign * diff, 4)
+    return _slim_result(refs)
+
+
+def fetch_reference_day(ymd, rebuild_only=False):
+    """Each TWSE code's reference price that day: asked only on suspected split days."""
+    p = fd.fetch("MI_INDEX_REF", "afterTrading/MI_INDEX",
+                 {"date": ymd, "type": "ALLBUT0999", "response": "json"},
+                 ymd, rebuild_only, slim=slim_reference)
+    return (p or {}).get("rows") or {}
+
+
+def infer_splits(daily, calendar, known=(), reference=None):
+    """
+    Splits the tables above miss (ETFs; anything on TPEx): trading halts for
+    two or more sessions and resumes near 1/N of the last close (N:1 for a
+    reverse split), well beyond the ±10% a session can move. `reference(date)`
+    gives that day's reference price where the exchange publishes it, and the
+    ratio is exact; otherwise N is the whole number the gap rounds to (the
+    opening auction is within the limit of the reference, so off by one at
+    worst). Events already in `known` (dates) are left alone.
+    """
+    pos = {d: i for i, d in enumerate(calendar)}
+    out = []
+    for a, b in zip(daily, daily[1:]):
+        if b["date"] in known or pos[b["date"]] - pos[a["date"]] < 3:
+            continue
+        if not a["close"] or not b["open"]:
+            continue
+        r = a["close"] / b["open"]
+        ratio = round(r) if r >= 1.5 else 1 / round(1 / r) if r <= 1 / 1.5 else None
+        if not ratio or abs(r / ratio - 1) >= 0.1:
+            continue
+        ref = reference(b["date"]) if reference else None
+        exact = bool(ref)
+        ref = ref or round(a["close"] / ratio, 2)
+        out.append({"date": b["date"], "kind": "分割" if ratio > 1 else "反分割",
+                    "before": a["close"], "ref": ref, "ratio": round(a["close"] / ref, 6),
+                    "inferred": True, **({} if exact else {"estimated": True})})
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -554,14 +655,16 @@ def holders_fresh_since(today=None):
 
 
 def build_stock(code, name, days, market, tracked, rebuild_only=False, exchange="TWSE",
-                broker_from=None):
+                broker_from=None, adjustments=None, reference=None):
     """
     market: {date: (quotes, t86_rows, margin_rows)} shared across stocks.
     `tracked` adds the per-stock broker data (main force, broker tables).
     `broker_from` (ISO date): day tables before it come from the cache only.
+    `adjustments`: this code's split / capital-reduction events (fetch_adjustments).
+    `reference(date, code)`: that day's reference price, or None (infer_splits).
     Returns None for a code with no quotes in range.
     """
-    days = [d for d in days if code in market[d][0]]
+    calendar, days = days, [d for d in days if code in market[d][0]]
     if not days:
         return None
     prev = load_previous(code)
@@ -620,7 +723,17 @@ def build_stock(code, name, days, market, tracked, rebuild_only=False, exchange=
         "start": days[0], "end": days[-1],
         "daily": daily, "holders": holders, "brokers": brokers,
         "brokerDaily": broker_daily,
+        "adjustments": adjust_events(daily, calendar, adjustments,
+                                     reference and (lambda d: reference(d, code))),
     }
+
+
+def adjust_events(daily, calendar, listed, reference=None):
+    """Listed events with sessions on both sides, plus inferred splits."""
+    first, last = daily[0]["date"], daily[-1]["date"]
+    ev = [e for e in listed or [] if first < e["date"] <= last]
+    ev += infer_splits(daily, calendar, {e["date"] for e in ev}, reference)
+    return sorted(ev, key=lambda e: e["date"])
 
 
 def write_stock(s):
@@ -719,6 +832,10 @@ def main():
         if i % 25 == 0 or i == len(calendar):
             print(f"  {d}  {i}/{len(calendar)}  {(time.time() - t0) / 60:.1f} min", flush=True)
 
+    adjustments = fetch_adjustments(months, args.rebuild)
+    print(f"  {sum(map(len, adjustments.values()))} TWSE split / capital-reduction event(s); "
+          "other splits are inferred from the price gap")
+
     if args.refresh_top:
         top = rank_top(market, calendar, names)
         write_toplist(top, calendar[-1])
@@ -747,12 +864,17 @@ def main():
     print(f"  building {len(codes)} stock(s), {len(tracked & set(codes))} with broker data "
           f"(day tables fetched from {broker_from})")
 
+    # TPEx reference prices are not wired in; its splits stay estimates.
+    def reference(d, code):
+        return None if code in otc else fetch_reference_day(d.replace("-", ""), args.rebuild).get(code)
+
     built = failed = 0
     for i, code in enumerate(codes, 1):
         try:
             s = build_stock(code, names.get(code), calendar, market, code in tracked,
                             args.rebuild, exchange="TPEx" if code in otc else "TWSE",
-                            broker_from=broker_from)
+                            broker_from=broker_from, adjustments=adjustments.get(code),
+                            reference=reference)
         except Exception as e:  # noqa: BLE001 - one bad page must not sink the run
             failed += 1
             print(f"  !! {code} failed: {e}", file=sys.stderr)

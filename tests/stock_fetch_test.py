@@ -165,6 +165,54 @@ class TestHolders(Base):
                                    "big1000Pct": 61.74})
 
 
+class TestAdjustments(Base):
+    """Splits and capital reductions: listed by TWSE, or inferred from a halt and a gap."""
+
+    def test_listed_event(self):
+        p = {"stat": "OK", "fields": ["恢復買賣日期", "股票代號", "名稱", "停止買賣前收盤價格",
+                                      "恢復買賣參考價", "漲停價格"],
+             "data": [["114/08/25", "2327", "國巨", "546.00", "136.50", "150.00"]]}
+        self.assertEqual(fs.slim_adjust(p)["rows"], [["2327", "2025-08-25", 546.0, 136.5]])
+
+    def test_reference_price_from_change(self):
+        p = {"tables": [{"fields": ["證券代號", "收盤價", "漲跌(+/-)", "漲跌價差"],
+                         "data": [["0050", "47.57", "<p style= color:red>+</p>", "0.41"],
+                                  ["2330", "1,000.00", "<p style= color:green>-</p>", "5.00"],
+                                  ["1101", "30.00", "<p> </p>", "0.00"],
+                                  ["9999", "--", "X", "0.00"]]}]}
+        self.assertEqual(fs.slim_reference(p)["rows"], {"0050": 47.16, "2330": 1005.0, "1101": 30.0})
+
+    cal = ["2025-06-09", "2025-06-10", "2025-06-11", "2025-06-12", "2025-06-13", "2025-06-16",
+           "2025-06-17", "2025-06-18"]
+
+    def rows(self, *pairs):
+        return [{"date": d, "open": o, "close": c} for d, o, c in pairs]
+
+    def test_inferred_split_uses_the_reference_price(self):
+        d = self.rows(("2025-06-10", 188, 188.65), ("2025-06-18", 47.5, 47.57))
+        ev = fs.infer_splits(d, self.cal, reference=lambda day: 47.16)
+        self.assertEqual([(e["date"], e["kind"], round(e["ratio"], 3), "estimated" in e) for e in ev],
+                         [("2025-06-18", "分割", 4.0, False)])
+
+    def test_without_a_reference_the_ratio_is_estimated(self):
+        d = self.rows(("2025-06-10", 6, 6.82), ("2025-06-18", 27.3, 27.4))
+        ev = fs.infer_splits(d, self.cal)
+        self.assertEqual([(e["kind"], e["ratio"], e["estimated"]) for e in ev], [("反分割", 0.25, True)])
+
+    def test_no_halt_or_no_round_ratio_is_not_a_split(self):
+        # A limit-down day with no halt, and a halt that resumes at an odd ratio
+        self.assertEqual(fs.infer_splits(self.rows(("2025-06-17", 100, 100), ("2025-06-18", 50, 50)),
+                                         self.cal), [])
+        self.assertEqual(fs.infer_splits(self.rows(("2025-06-10", 100, 100), ("2025-06-18", 40, 40)),
+                                         self.cal), [])
+
+    def test_listed_events_win_and_need_sessions_on_both_sides(self):
+        d = self.rows(("2025-06-10", 546, 546), ("2025-06-18", 140, 140))
+        listed = [{"date": "2025-06-18", "kind": "面額變更", "before": 546, "ref": 136.5, "ratio": 4.0},
+                  {"date": "2025-06-09", "kind": "減資", "before": 1, "ref": 2, "ratio": 0.5}]
+        self.assertEqual(fs.adjust_events(d, self.cal, listed), listed[:1])
+
+
 class TestBrokers(Base):
     def test_parse(self):
         body = ("<div class=\"t11\">單位：張　最後更新日：2026/10/16</div>"
