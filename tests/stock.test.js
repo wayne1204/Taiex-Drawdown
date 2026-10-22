@@ -162,6 +162,19 @@ module.exports = {
       t.eq("最新 returns to the last session", doc.getElementById("d-pick").value, fx.stock.end);
       t.ok("5-day toggle enabled again", !doc.querySelector('#seg-period button[data-v="5"]').disabled);
 
+      // ── Chart click and MA legend ──
+      const legend = () => chart.getOption().legend[0];
+      const ma5 = fx.stock.daily.slice(-5).reduce((a, r) => a + r.close, 0) / 5;
+      t.eq("MA legend over the K panel", legend().data, ["MA5", "MA20", "MA60"]);
+      t.eq("legend reads the selected session's MA", legend().formatter("MA5"),
+        "MA5 " + ma5.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+      const d30 = fx.stock.daily[30];
+      const [px, py] = chart.convertToPixel({ gridIndex: 0 }, [d30.date, d30.close]);
+      chart.getZr().trigger("click", { offsetX: px, offsetY: py });
+      t.eq("clicking a K bar selects its date", doc.getElementById("d-pick").value, d30.date);
+      t.eq("and the legend follows it", legend().formatter("MA60"), "MA60");   // < 60 sessions in
+      doc.getElementById("d-latest").click();
+
       // ── 法人 toggles ──
       const instNames = () => chart.getOption().series.filter(x => x.xAxisIndex === 2 && x.data && x.data.length)
         .map(x => x.name);
@@ -272,6 +285,23 @@ async function accountFlow(t, fx) {
     const put = window.__api.calls.filter(c => c.path === "favourites").pop();
     t.eq("[account] ☆ saves the list with this stock added", put && JSON.parse(put.body), { codes: ["8888", "9999"] });
     t.eq("[account] button and chips follow", [fav.textContent, chipCodes()], ["★ 已自選", ["8888", "9999"]]);
+    // Drag 9999 above 8888 with a mouse; jsdom has no layout, so the drop
+    // target comes from a stubbed elementFromPoint.
+    const ptr = (type, el, y) => {
+      const e = new window.MouseEvent(type, { bubbles: true, clientX: 0, clientY: y, button: 0 });
+      Object.defineProperties(e, { pointerId: { value: 1 }, pointerType: { value: "mouse" } });
+      el.dispatchEvent(e);
+    };
+    const c8 = doc.querySelector('#chips button[data-code="8888"]');
+    const c9 = doc.querySelector('#chips button[data-code="9999"]');
+    doc.elementFromPoint = () => c8;
+    ptr("pointerdown", c9, 40); ptr("pointermove", c9, -10); ptr("pointerup", c9, -10);
+    c9.click();                                   // the click a drop produces
+    await sleep(50);
+    const order = window.__api.calls.filter(c => c.path === "favourites").pop();
+    t.eq("[account] dragging a chip reorders and saves the list",
+      [chipCodes(), JSON.parse(order.body)], [["9999", "8888"], { codes: ["9999", "8888"] }]);
+    t.eq("[account] the drop does not open the dragged stock", doc.getElementById("title").textContent, "9999 測試股");
     doc.querySelector('#chips button[data-code="8888"]').click();
     await sleep(50);
     t.eq("[account] a chip opens its stock", doc.getElementById("title").textContent, "8888 另一檔");

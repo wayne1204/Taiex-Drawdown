@@ -132,6 +132,9 @@
     font:inherit;font-size:13px;text-align:left;cursor:pointer}
   .favs button:hover{color:var(--ink);background:var(--surface-2)}
   .favs button[aria-pressed="true"]{color:var(--ink);background:var(--surface-2);box-shadow:inset 2px 0 0 var(--c-up)}
+  .favs button{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  .favs button.dragging{opacity:.55;outline:1px dashed var(--ink-3);outline-offset:-1px}
+  .favs.sorting,.favs.sorting button{cursor:grabbing}
   .favs .code{color:var(--ink-3);min-width:3.4em;font-variant-numeric:tabular-nums}
   .favs .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .favs .tag{margin-left:auto;font-size:10.5px;color:var(--ink-3)}
@@ -401,7 +404,9 @@
   const mkt = s => s.exchange === 'TPEx' ? '上櫃' : '上市';
   const chips = document.getElementById('chips');
   chips.addEventListener('click', e=>{
-    const b = e.target.closest('button'); if(b) pickStock(b.dataset.code);
+    const b = e.target.closest('button'); if(!b) return;
+    if(b === dropped.b && performance.now() - dropped.at < 400) return;   // the drop, not a pick
+    pickStock(b.dataset.code);
   });
   // "2330", "2330 台積電", "台積電", "台積" all resolve; codes win over names.
   function resolve(text){
@@ -578,6 +583,18 @@
     lineStyle:{width:extra.width||2, color}, itemStyle:{color}, ...extra
   });
 
+  // MA legend over the K panel, reading the selected session's values.
+  // Clicking an entry hides or shows that line.
+  const MAS = {MA5:'ma5', MA20:'ma20', MA60:'ma60'};
+  const maLegend = () => {
+    const L = layout();
+    return {data:Object.keys(MAS), top:L.grids[P.K].top-(L.narrow?20:19), right:L.right,
+      itemWidth:12, itemHeight:3, itemGap:L.narrow?8:14, icon:'rect',
+      textStyle:{color:COLORS.ink3, fontSize:L.narrow?10:11.5},
+      inactiveColor:COLORS.ink4,
+      formatter:n => { const v = S[MAS[n]][sel]; return typeof v === 'number' ? `${n} ${nf(v,2)}` : n; }};
+  };
+
   // A dashed vertical rule on every panel at the selected session. Hung on
   // empty line series with fixed ids, so a date change can move it without
   // rebuilding the chart (and losing the user's zoom).
@@ -639,12 +656,14 @@
         axisLabel:{color:COLORS.ink3, fontSize:L.narrow?9:11, formatter:v=>{
           const a = Math.abs(v);
           if(a>=10000) return (v/10000).toFixed(v%10000===0 ? 0 : v%1000===0 ? 1 : 2)+'萬';
-          if(L.narrow && a>=1000) return (v/1000).toFixed(0)+'k';
+          if(L.narrow && a>=1000) return (v/1000).toFixed(v%1000===0 ? 0 : 1)+'k';
           return nf(v, i===P.K && a<100 ? 1 : 0);
         }}
       })),
       axisPointer:{link:[{xAxisIndex:'all'}], lineStyle:{color:COLORS.pointer, width:1, type:'dashed'},
         label:{backgroundColor:COLORS.line}},
+      // Keep which MA lines the user switched off across rebuilds.
+      legend: {...maLegend(), selected:((chart.getOption() || {}).legend || [{}])[0].selected},
       tooltip:{trigger:'axis', axisPointer:{type:'cross'},
         backgroundColor:alpha(COLORS.surface,.97), borderColor:COLORS.line, borderWidth:1,
         padding:L.narrow?[8,9]:[10,12], confine:true,
@@ -793,7 +812,7 @@
     sel = Math.max(0, Math.min(S.rows.length-1, i));
     syncDate(); renderKpis(); renderBrokers();
     if(rezoom) chart.dispatchAction({type:'dataZoom', ...zoomOpt()});
-    chart.setOption({series: selMarks()});
+    chart.setOption({series: selMarks(), legend: maLegend()});
   }
   dPick.addEventListener('change', ()=>{
     const v = dPick.value;
@@ -809,8 +828,10 @@
   chart.getZr().on('click', e=>{
     if(!S) return;
     const pt = [e.offsetX, e.offsetY];
-    if(!NAMES.some((_,i)=>chart.containPixel({gridIndex:i}, pt))) return;
-    const i = chart.convertFromPixel({xAxisIndex:0}, pt)[0];
+    // Convert through the grid hit: an {xAxisIndex} finder yields null here.
+    const g = NAMES.findIndex((_,i)=>chart.containPixel({gridIndex:i}, pt));
+    if(g < 0) return;
+    const i = chart.convertFromPixel({gridIndex:g}, pt)[0];
     if(Number.isFinite(i)) setSel(Math.round(i), false);
   });
 
@@ -943,11 +964,9 @@
     } catch { /* no API here: stay a plain static page */ }
     syncFav();
   }
-  document.getElementById('btn-fav').addEventListener('click', async ()=>{
-    if(!S) return;
-    if(!acct.user){ acctMsg.textContent = '請先登入再加入自選'; return; }
-    const code = S.stock.code, before = acct.favs.slice();
-    acct.favs = acct.favs.includes(code) ? acct.favs.filter(c=>c!==code) : [...acct.favs, code];
+  async function saveFavs(next){
+    const before = acct.favs.slice();
+    acct.favs = next;
     renderChips(); syncFav();                    // optimistic; undone on failure
     try {
       const r = await api('favourites', {method:'PUT', body:JSON.stringify({codes:acct.favs})});
@@ -958,7 +977,62 @@
       acctMsg.textContent = '自選儲存失敗';
     }
     renderChips(); syncFav();
+  }
+  document.getElementById('btn-fav').addEventListener('click', ()=>{
+    if(!S) return;
+    if(!acct.user){ acctMsg.textContent = '請先登入再加入自選'; return; }
+    const code = S.stock.code;
+    saveFavs(acct.favs.includes(code) ? acct.favs.filter(c=>c!==code) : [...acct.favs, code]);
   });
+
+  // Drag a chip to reorder the list. A mouse drags once it moves a few px; a
+  // finger has to hold still for a moment first, so a swipe still scrolls the
+  // chip row on a phone. The new order is saved when the chip is dropped.
+  let drag = null, dropped = {b:null, at:0};
+  const startDrag = () => {
+    drag.on = true;
+    drag.b.classList.add('dragging'); chips.classList.add('sorting');
+    try { drag.b.setPointerCapture(drag.id); } catch {}
+  };
+  const endDrag = save => {
+    if(!drag) return;
+    clearTimeout(drag.t);
+    if(drag.on){
+      drag.b.classList.remove('dragging'); chips.classList.remove('sorting');
+      dropped = {b:drag.b, at:performance.now()};
+      const next = [...chips.querySelectorAll('button[data-code]')].map(b=>b.dataset.code);
+      if(save && next.join() !== acct.favs.join()) saveFavs(next);
+      else renderChips();
+    }
+    drag = null;
+  };
+  chips.addEventListener('pointerdown', e=>{
+    const b = e.target.closest('button[data-code]');
+    if(!b || !acct.user || e.button) return;
+    drag = {b, id:e.pointerId, x:e.clientX, y:e.clientY, on:false,
+      t: e.pointerType === 'mouse' ? 0 : setTimeout(()=>{ if(drag) startDrag(); }, 300)};
+  });
+  chips.addEventListener('pointermove', e=>{
+    if(!drag || e.pointerId !== drag.id) return;
+    if(!drag.on){
+      const moved = Math.hypot(e.clientX-drag.x, e.clientY-drag.y);
+      if(e.pointerType === 'mouse'){ if(moved > 5) startDrag(); }
+      else if(moved > 8) return endDrag(false);        // a swipe: let it scroll
+      if(!drag.on) return;
+    }
+    const over = document.elementFromPoint(e.clientX, e.clientY);
+    const t = over && over.closest('#chips button[data-code]');
+    if(!t || t === drag.b) return;
+    const r = t.getBoundingClientRect();
+    const row = getComputedStyle(chips).flexDirection === 'row';
+    const after = row ? e.clientX > r.left + r.width/2 : e.clientY > r.top + r.height/2;
+    chips.insertBefore(drag.b, after ? t.nextSibling : t);
+  });
+  chips.addEventListener('pointerup', ()=>endDrag(true));
+  chips.addEventListener('pointercancel', ()=>endDrag(false));
+  // Once a finger drag has started, keep the row (and page) from scrolling.
+  chips.addEventListener('touchmove', e=>{ if(drag && drag.on) e.preventDefault(); }, {passive:false});
+  chips.addEventListener('contextmenu', e=>{ if(drag) e.preventDefault(); });
   document.getElementById('btn-logout').addEventListener('click', async ()=>{
     try { await api('logout', {method:'POST', body:'{}'}); } catch {}
     if(window.google && google.accounts) google.accounts.id.disableAutoSelect();

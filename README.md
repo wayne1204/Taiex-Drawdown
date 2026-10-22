@@ -111,7 +111,8 @@ echo 2317 >> stocks.txt                   # 把股票加入觀察清單（多出
 
 ## 帳號與自選（Google 登入）
 
-`stock.html` 右上可用 Google 帳號登入；登入後按標題旁的 ☆ 把股票加入自選，自選顯示在頁首、跨裝置保存。
+`stock.html` 右上可用 Google 帳號登入；登入後按標題旁的 ☆ 把股票加入自選，自選顯示在頁首、跨裝置保存，
+可拖曳調整順序（手機上長按再拖）。
 自選只是個人書籤，**不影響**哪些股票有主力 / 分點資料（那仍由站方的 `stocks.txt` 決定）。
 
 後端是 Cloudflare Pages Functions（`functions/api/*` → `lib/account.mjs`）加一個 D1 資料庫，
