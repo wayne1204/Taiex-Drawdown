@@ -276,7 +276,8 @@ async function accountFlow(t, fx) {
       doc.getElementById("side").contains(doc.getElementById("chips")));
     t.eq("[account] chips are the user's own list, not stocks.txt", chipCodes(), ["8888"]);
     t.eq("[account] a list row shows code and name, with a count",
-      [doc.querySelector('#chips button[data-code="8888"]').textContent, doc.getElementById("fav-count").textContent],
+      [doc.querySelector('#chips button[data-code="8888"] .code').textContent +
+       doc.querySelector('#chips button[data-code="8888"] .nm').textContent, doc.getElementById("fav-count").textContent],
       ["8888另一檔", "1"]);
     const fav = doc.getElementById("btn-fav");
     t.eq("[account] ☆ for a stock not in the list", [fav.hidden, fav.textContent], [false, "☆ 加入自選"]);
@@ -302,6 +303,13 @@ async function accountFlow(t, fx) {
     t.eq("[account] dragging a chip reorders and saves the list",
       [chipCodes(), JSON.parse(order.body)], [["9999", "8888"], { codes: ["9999", "8888"] }]);
     t.eq("[account] the drop does not open the dragged stock", doc.getElementById("title").textContent, "9999 測試股");
+    doc.querySelector('#chips button[data-code="9999"] .rm').click();
+    await sleep(50);
+    t.eq("[account] × removes the stock without opening another",
+      [chipCodes(), JSON.parse(window.__api.calls.filter(c => c.path === "favourites").pop().body),
+       doc.getElementById("title").textContent], [["8888"], { codes: ["8888"] }, "9999 測試股"]);
+    doc.getElementById("btn-fav").click();         // back to 8888, 9999 for the steps below
+    await sleep(50);
     doc.querySelector('#chips button[data-code="8888"]').click();
     await sleep(50);
     t.eq("[account] a chip opens its stock", doc.getElementById("title").textContent, "8888 另一檔");

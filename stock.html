@@ -132,6 +132,15 @@
     font:inherit;font-size:13px;text-align:left;cursor:pointer}
   .favs button:hover{color:var(--ink);background:var(--surface-2)}
   .favs button[aria-pressed="true"]{color:var(--ink);background:var(--surface-2);box-shadow:inset 2px 0 0 var(--c-up)}
+  /* × to drop a stock from the list: on hover, or on the open stock's chip
+     where there is no hover (phones). */
+  .favs .rm{margin-left:auto;visibility:hidden;width:16px;height:16px;border-radius:4px;
+    display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
+    color:var(--ink-3);font-size:13px;line-height:1}
+  .favs .tag + .rm{margin-left:6px}
+  .favs .rm:hover{color:var(--ink);background:var(--line)}
+  .favs button:hover .rm{visibility:visible}
+  @media (hover:none){ .favs button[aria-pressed="true"] .rm{visibility:visible} }
   .favs button{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   .favs button.dragging{opacity:.55;outline:1px dashed var(--ink-3);outline-offset:-1px}
   .favs.sorting,.favs.sorting button{cursor:grabbing}
@@ -146,7 +155,10 @@
     .favs button{width:auto;flex:0 0 auto;white-space:nowrap;border:1px solid var(--line);border-radius:99px;padding:4px 11px}
     .favs button[aria-pressed="true"]{box-shadow:none;border-color:var(--ink-3)}
     .favs .code{min-width:0}
+    .favs .rm{display:none;margin-left:4px}
+    .favs button:hover .rm{display:inline-flex}
   }
+  @media (max-width: 900px) and (hover:none){ .favs button[aria-pressed="true"] .rm{display:inline-flex} }
   select{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:7px;
     padding:6px 10px;font:inherit;font-size:13px;min-width:12em}
 
@@ -405,6 +417,7 @@
   const chips = document.getElementById('chips');
   chips.addEventListener('click', e=>{
     const b = e.target.closest('button'); if(!b) return;
+    if(e.target.closest('.rm')) return saveFavs(acct.favs.filter(c=>c!==b.dataset.code));
     if(b === dropped.b && performance.now() - dropped.at < 400) return;   // the drop, not a pick
     pickStock(b.dataset.code);
   });
@@ -901,7 +914,8 @@
           const s = LIST.find(x=>x.code===c) || {code:c};
           return `<button data-code="${c}" aria-pressed="${c===cur}" title="${label(s)}">` +
             `<span class="code">${c}</span><span class="nm">${s.name||''}</span>` +
-            (s.exchange === 'TPEx' ? '<span class="tag">上櫃</span>' : '') + '</button>';
+            (s.exchange === 'TPEx' ? '<span class="tag">上櫃</span>' : '') +
+            `<span class="rm" role="button" aria-label="從自選移除 ${c}" title="從自選移除">×</span></button>`;
         }).join('')
       : '<p class="muted">按標題旁的 ☆ 把股票加入自選</p>';
   }
@@ -1008,7 +1022,7 @@
   };
   chips.addEventListener('pointerdown', e=>{
     const b = e.target.closest('button[data-code]');
-    if(!b || !acct.user || e.button) return;
+    if(!b || !acct.user || e.button || e.target.closest('.rm')) return;
     drag = {b, id:e.pointerId, x:e.clientX, y:e.clientY, on:false,
       t: e.pointerType === 'mouse' ? 0 : setTimeout(()=>{ if(drag) startDrag(); }, 300)};
   });
