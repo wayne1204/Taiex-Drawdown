@@ -32,3 +32,4 @@ vendor/
 
 # Cloudflare credentials for ./run.sh deploy
 .env
+data/.fetch_stocks.lock

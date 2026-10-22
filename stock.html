@@ -314,7 +314,6 @@
           <button data-v="1" aria-pressed="true">近 1 日</button>
           <button data-v="5">近 5 日</button>
           <button data-v="20">近 20 日</button>
-          <button data-v="60">近 60 日</button>
         </div>
       </div>
       <div class="br-sum num" id="br-sum"></div>
@@ -323,7 +322,7 @@
 
     <footer>
       <p><strong>主力買賣超</strong> = 當期買超前 15 名券商分點合計 − 賣超前 15 名合計（富邦 e-Broker 定義）；
-      日序列以每日分點表回補整段期間。選擇過去日期時，近 1 日分點顯示當天資料，近 5/20/60 日統計只提供最新交易日。<strong>大戶</strong> = 集保持股 &gt; 400 張者，
+      日序列以每日分點表回補整段期間。選擇過去日期時，近 1 日分點顯示當天資料，近 5/20 日統計只提供最新交易日。<strong>大戶</strong> = 集保持股 &gt; 400 張者，
       提示框另列 &gt; 1000 張。</p>
       <p>資料來源：臺灣證券交易所與證券櫃檯買賣中心（每日收盤行情、三大法人買賣超、融資融券餘額）、
       神秘金字塔 norway.twsthr.info（集保股權分散）、富邦 e-Broker（主力進出）。
@@ -691,14 +690,12 @@
   }
 
   // ── Broker tables ─────────────────────────────────────────
-  // The 5/20/60-day windows exist only as of the latest session (the source
-  // publishes them that way); an earlier date gets that day's own table.
+  // The 5/20-day windows exist only as of the latest session (the source
+  // publishes them that way). One day, latest or not, is that day's own table.
   const isLatest = () => sel === S.rows.length - 1;
   function brokersFor(){
     if(period !== '1') return isLatest() ? (S.stock.brokers || {})[period] : null;
     const d = S.dates[sel];
-    const latest = (S.stock.brokers || {})['1'];
-    if(latest && latest.updated === d) return latest;
     const c = (S.stock.brokerDaily || {})[d];
     if(!c) return null;
     const obj = x => ({name:x[0], buy:x[1], sell:x[2], net:x[3], pct:x[4]});

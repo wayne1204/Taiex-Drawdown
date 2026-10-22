@@ -165,23 +165,6 @@ class TestHolders(Base):
                                    "big1000Pct": 61.74})
 
 
-class TestMainSeries(Base):
-    def test_year_inferred_from_trading_days(self):
-        days = ["2025-12-30", "2025-12-31", "2026-01-02", "2026-01-05"]
-        body = "1230,1231,0102,0105 600,610,620,630 -100,200,--,-5"
-        self.assertEqual(fs.parse_main_series(body, days),
-                         {"2025-12-30": -100, "2025-12-31": 200, "2026-01-05": -5})
-
-    def test_unmatched_latest_point_dropped(self):
-        # DJ has a session TWSE's K-bar data does not yet: drop it, keep the rest aligned
-        days = ["2026-10-15"]
-        self.assertEqual(fs.parse_main_series("1015,1016 1,2 7,8", days), {"2026-10-15": 7})
-
-    def test_garbage(self):
-        self.assertEqual(fs.parse_main_series("", ["2026-10-15"]), {})
-        self.assertEqual(fs.parse_main_series("1015 1", ["2026-10-15"]), {})
-
-
 class TestBrokers(Base):
     def test_parse(self):
         body = ("<div class=\"t11\">單位：張　最後更新日：2026/10/16</div>"
@@ -205,6 +188,107 @@ class TestBrokers(Base):
 
     def test_empty_page(self):
         self.assertIsNone(fs.parse_brokers("<html>無資料</html>"))
+
+
+class TestTrackedPages(Base):
+    """A tracked stock asks for each session's table and the 5/20-day windows only."""
+
+    @staticmethod
+    def page(d, tb, ts):
+        y, m, dd = d.split("-")
+        return (f"<div>最後更新日：{y}/{int(m)}/{int(dd)}</div><TR><TD><a>x</a></TD><TD>9</TD>"
+                "<TD>0</TD><TD>9</TD><TD>1%</TD><TD><a>y</a></TD><TD>0</TD><TD>4</TD><TD>4</TD>"
+                f"<TD>1%</TD></TR><tr><td>合計買超張數</td><td>{tb}</td>"
+                f"<td>合計賣超張數</td><td>{ts}</td></tr>")
+
+    def test_pages_and_main_force(self):
+        days = ["2026-10-15", "2026-10-16"]
+        quotes = {"2327": [1, 2, 1, 2, 1000]}
+        market = {d: (quotes, {}, {}) for d in days}
+        seen = []
+
+        def fake_fetch_page(source, key, url, encoding, rebuild_only=False, permanent=False,
+                            fresh_since=None):
+            seen.append(source if source != "DJ_ZCO" else f"DJ_ZCO{key[4:]}")
+            if source == "DJ_ZCO_DAY":
+                d = key.split("_")[1]
+                d = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+                return self.page(d, 300 if d == days[0] else 50, 100)
+            if source == "DJ_ZCO":
+                return self.page(days[-1], 1, 1)
+            return None
+
+        with patch.object(fs, "fetch_page", side_effect=fake_fetch_page), \
+             patch.object(fs, "load_previous", return_value={}):
+            s = fs.build_stock("2327", "國巨", days, market, tracked=True)
+
+        self.assertEqual(sorted(seen), ["DJ_ZCO_2", "DJ_ZCO_4", "DJ_ZCO_DAY", "DJ_ZCO_DAY",
+                                        "TWSTHR"])
+        self.assertEqual(sorted(s["brokers"]), ["20", "5"])
+        self.assertEqual([r["mainForce"] for r in s["daily"]], [200, -50])
+        self.assertEqual(sorted(s["brokerDaily"]), days)
+
+    def test_days_before_broker_window_are_cache_only(self):
+        days = ["2025-10-20", "2026-10-16"]
+        market = {d: ({"2327": [1, 2, 1, 2, 1000]}, {}, {}) for d in days}
+        calls = []
+
+        def fake_fetch_page(source, key, url, encoding, rebuild_only=False, permanent=False,
+                            fresh_since=None):
+            calls.append((source, key, rebuild_only))
+            return None
+
+        with patch.object(fs, "fetch_page", side_effect=fake_fetch_page), \
+             patch.object(fs, "load_previous", return_value={}):
+            fs.build_stock("2327", "國巨", days, market, tracked=True, broker_from="2025-10-22")
+        day_calls = {k: ro for src, k, ro in calls if src == "DJ_ZCO_DAY"}
+        self.assertEqual(day_calls, {"2327_20251020": True, "2327_20261016": False})
+
+
+class TestDjPacing(Base):
+    """A failure doubles the DJ delay; a run of clean requests halves it again."""
+
+    def test_backs_off_then_recovers(self):
+        import tempfile
+        from unittest.mock import MagicMock
+        ok = MagicMock(content=b"x")
+        replies = [OSError("timeout"), ok] + [ok] * fs.DJ_RECOVER
+
+        def fake_get(*_a, **_k):
+            r = replies.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(fetch_data.SESSION, "get", side_effect=fake_get), \
+             patch.object(fetch_data, "_cache_path",
+                          side_effect=lambda s, k: os.path.join(tmp, f"{s}_{k}.json")), \
+             patch.object(fs, "_dj", {"sleep": fs.DJ_SLEEP, "ok": 0}), \
+             patch.object(fs.time, "sleep"), patch("sys.stderr"):
+            fs.fetch_page("DJ_ZCO_DAY", "k0", "u", "big5")
+            self.assertEqual(fs._dj["sleep"], fs.DJ_SLEEP * 2)
+            for i in range(1, fs.DJ_RECOVER):
+                fs.fetch_page("DJ_ZCO_DAY", f"k{i}", "u", "big5")
+            self.assertEqual(fs._dj["sleep"], fs.DJ_SLEEP)
+
+
+class TestTopList(Base):
+    def test_ranks_by_trading_value_and_skips_funds(self):
+        days = ["2026-10-15", "2026-10-16"]
+        q = {"2330": [1, 1, 1, 1000, 50], "2327": [1, 1, 1, 500, 300],
+             "0050": [1, 1, 1, 200, 9999], "1101": [1, 1, 1, 40, 10]}
+        market = {d: (q, {}, {}) for d in days}
+        top = fs.rank_top(market, days, {"2327": "國巨"}, n=2)
+        self.assertEqual([c for c, _, _ in top], ["2327", "2330"])   # 0050 is a fund
+        self.assertEqual(top[0][1], "國巨")
+        self.assertEqual(top[0][2], 500 * 300 * fs.LOTS)
+
+    def test_needs_half_the_sessions(self):
+        days = ["2026-10-14", "2026-10-15", "2026-10-16"]
+        market = {d: ({"2330": [1, 1, 1, 10, 10]}, {}, {}) for d in days}
+        market["2026-10-16"][0]["9999"] = [1, 1, 1, 1e6, 1e6]       # one huge day only
+        self.assertEqual([c for c, _, _ in fs.rank_top(market, days, {})], ["2330"])
 
 
 class TestWatchlist(Base):

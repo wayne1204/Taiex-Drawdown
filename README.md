@@ -78,10 +78,11 @@ fetch_data.py   →   data/taiex-daily.{json,js}   →   index.html
 | 三大法人買賣超（外資 / 投信 / 自營商） | TWSE `fund/T86`、TPEx `insti/dailyTrade`（全市場） | 日 | 全部 |
 | 融資增減、融資餘額 | TWSE `marginTrading/MI_MARGN`（ALL）、TPEx `margin/balance` | 日 | 全部 |
 | 股東人數、大戶人數（>400 張，提示框另列 >1000 張） | [神秘金字塔](https://norway.twsthr.info/StockHolders.aspx?stock=2327) | 週 | 全部 |
-| 主力買賣超、券商分點買賣超前 15 名（1/5/20/60 日） | [富邦 e-Broker](https://fubon-ebrokerdj.fbs.com.tw/z/zc/zco/zco_2327.djhtm) | 日 | 觀察清單 |
+| 主力買賣超、券商分點買賣超前 15 名（1/5/20 日） | [富邦 e-Broker](https://fubon-ebrokerdj.fbs.com.tw/z/zc/zco/zco_2327.djhtm) | 日 | 觀察清單 + 成交值前 100 |
 
 ```bash
-python3 fetch_stocks.py                   # 全市場 + 觀察清單的分點資料（預設 24 個月）
+python3 fetch_stocks.py                   # 全市場（預設 24 個月）+ 追蹤股的分點資料（近 12 個月）
+python3 fetch_stocks.py --refresh-top     # 先依近 60 日平均成交值重排 top100.txt
 python3 fetch_stocks.py --watchlist-only  # 只建 stocks.txt（快）
 python3 fetch_stocks.py --stocks 2454     # 只建指定股票，含分點資料
 echo 2317 >> stocks.txt                   # 把股票加入觀察清單（多出主力與分點）
@@ -91,8 +92,12 @@ echo 2317 >> stocks.txt                   # 把股票加入觀察清單（多出
   每天都只有 6 個請求（證交所、櫃買中心各 3 個）。櫃買法人表的欄位名稱重複，依位置取值，
   並逐列驗證外資 + 投信 + 自營商 = 三大法人合計，不符的列捨棄。
 - 股東 / 大戶每週更新一次（週六之後第一次執行時重抓全部股票的集保頁，約 2,300 頁、75 分鐘）。
-- 主力與分點需要每檔每日一個請求，只對觀察清單抓取：富邦序列只回溯約 45 個交易日，其餘以逐日分點表
-  （自設區間查詢，過去日永久快取）回補。每多一檔觀察股，首次約多 8 分鐘。
+- 主力與分點需要每檔每日一個請求，只對**追蹤股**抓取：`stocks.txt`（觀察清單）加上 `top100.txt`
+  （近 60 日平均成交值前 100 名，排除 ETF；`--refresh-top` 才重排，可手動編輯）。逐日分點表
+  （自設區間查詢，過去日永久快取）只回補近 12 個月（`--broker-months`），更早的日子只讀快取。
+  主力 = 當日分點表的合計買超 − 合計賣超。每晚每檔 3 個請求：當日分點表與近 5/20 日統計。
+- 富邦頁面每個請求間隔 0.8 秒，出錯時自動加倍（上限 3.2 秒），連續 200 個請求成功再減半。新增一檔追蹤股約需 245 個請求（~4 分鐘）。
+  同一時間只允許一個 `fetch_stocks.py`，另一個會直接略過。
 - **首次建置**（本機沒有 `data/raw/` 快取）：上市櫃全部約 3 小時（櫃買中心回應較慢）；之後每晚數分鐘
   （週六後首次含集保頁約 1.5 小時）。
 - 頁面上的**日期**欄可檢視任一交易日的籌碼與當日分點；三大法人面板右上可分別開關外資 / 投信 / 自營商 / 合計。

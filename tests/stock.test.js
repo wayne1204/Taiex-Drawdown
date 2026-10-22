@@ -44,12 +44,15 @@ function fixture() {
   const stock = {
     code: "9999", name: "測試股", generatedAt: "2026-10-18T08:00:00",
     start: daily[0].date, end: daily[daily.length - 1].date, daily, holders,
-    brokers: { "1": { updated: daily[daily.length - 1].date, buy: side("B"), sell: side("S") },
-               "5": { updated: daily[daily.length - 1].date, buy: side("B5"), sell: side("S5").slice(0, 3) } }
+    // Windows exist only as of the latest session, and only 5 and 20 days
+    brokers: { "5": { updated: daily[daily.length - 1].date, buy: side("B5"), sell: side("S5").slice(0, 3) } }
   };
-  // A past session's own broker table, as fetch_stocks.py stores it (arrays)
+  // Every session's own broker table, latest included, as fetch_stocks.py stores it (arrays)
+  const arr = x => [x.name, x.buy, x.sell, x.net, x.pct];
   stock.brokerDaily = { [daily[60].date]: { buy: [["過去券商", 10, 1, 9, 0.1]], sell: [["賣方", 1, 5, 4, 0.1]],
-                                            totalBuy: 9, totalSell: 4 } };
+                                            totalBuy: 9, totalSell: 4 },
+                        [daily[daily.length - 1].date]: { buy: side("B").map(arr), sell: side("S").map(arr),
+                                                          totalBuy: 1500, totalSell: 150 } };
   stock.tracked = true;
   // A whole-market stock off the watchlist: same series, no broker data
   const other = { ...stock, code: "8888", name: "另一檔", tracked: false, brokers: {}, brokerDaily: {},
@@ -133,7 +136,8 @@ module.exports = {
       t.eq("15 buy rows for 1 day", doc.querySelectorAll("#brokers .tbl:first-child tbody tr").length, 15);
       doc.querySelector('#seg-period button[data-v="5"]').click();
       t.eq("period toggle swaps tables", doc.querySelectorAll("#brokers .tbl:last-child tbody tr").length, 3);
-      doc.querySelector('#seg-period button[data-v="60"]').click();
+      t.ok("no 60-day window", !doc.querySelector('#seg-period button[data-v="60"]'));
+      doc.querySelector('#seg-period button[data-v="20"]').click();
       t.ok("period without data says so", /沒有分點資料/.test(doc.getElementById("br-sum").textContent));
 
       // ── Date box ──
@@ -147,7 +151,7 @@ module.exports = {
       doc.querySelector('#seg-period button[data-v="1"]').click();
       t.ok("1-day brokers come from that day's own table",
         doc.querySelector("#brokers tbody td").textContent === "過去券商");
-      t.ok("5/20/60 disabled on a past date",
+      t.ok("5/20 disabled on a past date",
         doc.querySelector('#seg-period button[data-v="5"]').disabled);
       const sat = new Date(Date.parse(d60.date) + 864e5 * ((6 - new Date(d60.date).getUTCDay() + 7) % 7 || 7));
       pickDate(sat.toISOString().slice(0, 10));

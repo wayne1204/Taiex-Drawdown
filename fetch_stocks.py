@@ -12,8 +12,12 @@ Builds a daily series for EVERY listed (TWSE) and OTC (TPEx) stock and ETF
   3. Margin balance / change   MI_MARGN ALL         margin/balance    day, whole market
   4. Shareholder distribution  norway.twsthr.info (both markets)      stock, weekly
 
-  Watchlist stocks only (one request per stock per session - too many for all)
-  5. Main-force net + brokers  fubon-ebrokerdj (DJ)     (series, daily tables, windows)
+  Tracked stocks only (one request per stock per session - too many for all)
+  5. Main-force net + brokers  fubon-ebrokerdj (DJ)     (daily tables, 5/20-day windows)
+
+Tracked = stocks.txt (the watchlist) + top100.txt (the top 100 stocks by
+trading value, written by --refresh-top) + --stocks. Day tables are fetched for
+the last --broker-months (default 12); older days are served from the cache only.
 
 The whole-market queries cost six requests a day (three per exchange) however
 many stocks are built; they are cached slimmed down to the columns read back. The trading
@@ -31,6 +35,7 @@ Usage:
   python3 fetch_stocks.py --watchlist-only    # just stocks.txt (fast)
   python3 fetch_stocks.py --stocks 2327,2330  # just these, with broker data
   python3 fetch_stocks.py --months 36         # deeper history (default 24)
+  python3 fetch_stocks.py --refresh-top       # re-rank top100.txt, then fetch
   python3 fetch_stocks.py --rebuild           # no requests; cache only
 
 Note: Chinese string literals below are matched against response payloads
@@ -51,14 +56,26 @@ import fetch_data as fd
 ROOT = fd.ROOT
 OUT_DIR = os.path.join(fd.DATA_DIR, "stocks")
 WATCHLIST = os.path.join(ROOT, "stocks.txt")
+TOPLIST = os.path.join(ROOT, "top100.txt")
 DEFAULT_MONTHS = 24
+DEFAULT_BROKER_MONTHS = 12
+TOP_N, TOP_SESSIONS = 100, 60
+LOCK = os.path.join(fd.DATA_DIR, ".fetch_stocks.lock")
+
+# DJ broker pages are paced on their own: 0.8 s between requests, doubled (up
+# to DJ_SLEEP_MAX) whenever a request fails, so a site that starts pushing back
+# is met with a slower crawl rather than a burst of retries. Every DJ_RECOVER
+# clean requests in a row halve it again, so a passing hiccup does not slow
+# the rest of a long backfill.
+DJ_SLEEP, DJ_SLEEP_MAX, DJ_RECOVER = 0.8, 3.2, 200
+_dj = {"sleep": DJ_SLEEP, "ok": 0}
 
 HOLDERS_URL = "https://norway.twsthr.info/StockHolders.aspx?stock={code}"
 DJ_BASE = "https://fubon-ebrokerdj.fbs.com.tw"
-DJ_SERIES_URL = DJ_BASE + "/Z/ZC/ZCO/CZCO.DJBCD?A={code}"
-# zco_<code>.djhtm is the one-day table; the _N suffix picks the window
-# from the page's own <select name="D">: 2 = 5 days, 4 = 20, 6 = 60.
-DJ_BROKER_PERIODS = {"1": "", "5": "_2", "20": "_4", "60": "_6"}
+# zco_<code>_N.djhtm is a window as of the latest session, N from the page's own
+# <select name="D">: 2 = 5 days, 4 = 20. Only these are fetched: the one-day
+# page repeats the day table below, and 主力 is each day table's own totals.
+DJ_BROKER_PERIODS = {"5": "_2", "20": "_4"}
 DJ_BROKER_URL = DJ_BASE + "/z/zc/zco/zco_{code}{suffix}.djhtm"
 # Custom range (e = from, f = to, unpadded Y-M-D): one session's broker table
 # for any past day. Past days never change, so these are cached for good.
@@ -89,6 +106,36 @@ def read_watchlist(path=WATCHLIST):
             if code and code not in codes:
                 codes.append(code)
     return codes
+
+
+def rank_top(market, calendar, names, n=TOP_N, sessions=TOP_SESSIONS):
+    """
+    The n most-traded stocks (ETFs and other 00xx funds excluded), by average
+    daily trading value (close x volume) over the last `sessions` sessions.
+    """
+    recent = [d for d in calendar if market[d][0]][-sessions:]
+    total, seen = {}, {}
+    for d in recent:
+        for code, q in market[d][0].items():
+            if not re.fullmatch(r"[1-9]\d{3}", code):
+                continue
+            close, lots = q[3], q[4]
+            if close is None or lots is None:
+                continue
+            total[code] = total.get(code, 0) + close * lots * LOTS
+            seen[code] = seen.get(code, 0) + 1
+    # A code must trade on at least half the sessions: one huge day is not "most traded".
+    avg = {c: total[c] / seen[c] for c in total if seen[c] * 2 >= len(recent)}
+    return [(c, names.get(c), avg[c]) for c in sorted(avg, key=avg.get, reverse=True)[:n]]
+
+
+def write_toplist(top, asof, path=TOPLIST):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"# Top {len(top)} stocks by average daily trading value, last "
+                f"{TOP_SESSIONS} sessions to {asof}.\n"
+                "# Written by `fetch_stocks.py --refresh-top`; these get broker data too.\n")
+        for code, name, v in top:
+            f.write(f"{code}  # {(name or '').strip()} {v / 1e8:,.0f} 億/日\n")
 
 
 # --------------------------------------------------------------------------
@@ -339,11 +386,23 @@ def fetch_page(source, key, url, encoding, rebuild_only=False, permanent=False,
             with open(cp, "w", encoding="utf-8") as f:
                 json.dump({"_fetchedOn": date.today().isoformat(), "url": url,
                            "body": body}, f, ensure_ascii=False)
-            time.sleep(fd.SLEEP_BASE)
+            if source.startswith("DJ_"):
+                _dj["ok"] += 1
+                if _dj["ok"] >= DJ_RECOVER and _dj["sleep"] > DJ_SLEEP:
+                    _dj["sleep"], _dj["ok"] = max(_dj["sleep"] / 2, DJ_SLEEP), 0
+                    print(f"  .. DJ pacing back to {_dj['sleep']:.1f}s",
+                          file=sys.stderr, flush=True)
+            time.sleep(_dj["sleep"] if source.startswith("DJ_") else fd.SLEEP_BASE)
             return body
         except Exception as e:  # noqa: BLE001 - same retry policy as fetch()
             last_err = e
             fd._stats["retries"] += 1
+            if source.startswith("DJ_"):
+                _dj["ok"] = 0
+            if source.startswith("DJ_") and _dj["sleep"] < DJ_SLEEP_MAX:
+                _dj["sleep"] = min(_dj["sleep"] * 2, DJ_SLEEP_MAX)
+                print(f"  .. {source} {key}: {e}; DJ pacing now {_dj['sleep']:.1f}s",
+                      file=sys.stderr, flush=True)
             if attempt < fd.MAX_RETRIES - 1:
                 time.sleep(delay)
                 delay *= 2
@@ -414,35 +473,6 @@ def parse_holders(body):
     return sorted(out, key=lambda r: r["date"])
 
 
-def parse_main_series(body, trading_days):
-    """
-    CZCO.DJBCD -> {date: net lots}. The payload is three space-separated lists:
-    MMDD dates, closes, main-force net. There is no year, so each MMDD is
-    pinned to the latest unused trading day with that month/day, walking back
-    from the newest - a point that matches no recent session is dropped.
-    """
-    if not body:
-        return {}
-    parts = body.strip().split()
-    if len(parts) < 3:
-        return {}
-    mmdd = parts[0].split(",")
-    nets = parts[2].split(",")
-    if len(mmdd) != len(nets):
-        return {}
-    days = sorted(trading_days, reverse=True)
-    out, j = {}, 0
-    for md, v in zip(reversed(mmdd), reversed(nets)):
-        for k in range(j, min(j + 10, len(days))):
-            if days[k][5:7] + days[k][8:10] == md:
-                n = fd.parse_num(v)
-                if n is not None:
-                    out[days[k]] = n
-                j = k + 1
-                break
-    return out
-
-
 def parse_brokers(body):
     """
     zco page -> {"updated", "buy": [...], "sell": [...]}, top brokers each side.
@@ -463,7 +493,8 @@ def parse_brokers(body):
     if not buy and not sell:
         return None
     # The page's own totals (合計買超張數 / 合計賣超張數); their difference is
-    # the day's main-force net, the same figure as the CZCO series.
+    # the day's main-force net. DJ's own 主力 series matches it to within 1 張
+    # (rounding), so the series page is not fetched.
     text = _cell_text(body)
     tot = {k: re.search(k + r"\s*([\d,]+)", text) for k in ("合計買超張數", "合計賣超張數")}
     return {"updated": fd.parse_twse_date(m.group(1)) if m else None,
@@ -522,10 +553,12 @@ def holders_fresh_since(today=None):
     return (today - timedelta(days=(today.weekday() - 5) % 7)).isoformat()
 
 
-def build_stock(code, name, days, market, tracked, rebuild_only=False, exchange="TWSE"):
+def build_stock(code, name, days, market, tracked, rebuild_only=False, exchange="TWSE",
+                broker_from=None):
     """
     market: {date: (quotes, t86_rows, margin_rows)} shared across stocks.
     `tracked` adds the per-stock broker data (main force, broker tables).
+    `broker_from` (ISO date): day tables before it come from the cache only.
     Returns None for a code with no quotes in range.
     """
     days = [d for d in days if code in market[d][0]]
@@ -538,17 +571,16 @@ def build_stock(code, name, days, market, tracked, rebuild_only=False, exchange=
     if tracked:
         main = {r["date"]: r.get("mainForce") for r in prev.get("daily") or []
                 if r.get("mainForce") is not None}
-        main.update(parse_main_series(
-            fetch_page("DJ_CZCO", code, DJ_SERIES_URL.format(code=code), "cp950", rebuild_only),
-            days))
-        # Per-day broker tables for every session in range. The first run walks
-        # the whole range (one request a day); after that only new days are asked.
-        for i, d in enumerate(days, 1):
-            b = fetch_broker_day(code, d, rebuild_only)
+        # Per-day broker tables, newest first so an interrupted backfill still
+        # leaves the most recent sessions. The first run walks the broker window
+        # (one request a day); after that only new days are asked. Days before
+        # the window are used if cached and never fetched.
+        for i, d in enumerate(reversed(days), 1):
+            b = fetch_broker_day(code, d, rebuild_only or (broker_from is not None
+                                                           and d < broker_from))
             if b is not None:
                 broker_daily[d] = compact_brokers(b)
-                # The CZCO series reaches back ~45 sessions; the tables fill the rest.
-                if main.get(d) is None and b["totalBuy"] is not None and b["totalSell"] is not None:
+                if b["totalBuy"] is not None and b["totalSell"] is not None:
                     main[d] = b["totalBuy"] - b["totalSell"]
             if i % 50 == 0:
                 print(f"    {code} broker tables {i}/{len(days)}", flush=True)
@@ -598,11 +630,12 @@ def write_stock(s):
                 + json.dumps(s, ensure_ascii=False, separators=(",", ":")) + ";\n")
 
 
-def write_index(watchlist):
+def write_index(watchlist, tracked=None):
     """
     The page's stock picker: every stock with an output file, watchlist first
     (in list order, the first being the page's default), then by code.
     """
+    tracked = set(watchlist) if tracked is None else set(tracked)
     built = sorted(f[:-3] for f in os.listdir(OUT_DIR)
                    if f.endswith(".js") and f != "index.js")
     order = [c for c in watchlist if c in built] + [c for c in built if c not in watchlist]
@@ -611,7 +644,7 @@ def write_index(watchlist):
         s = load_previous(code)
         if s:
             entries.append({"code": code, "name": s.get("name"), "end": s.get("end"),
-                            "tracked": code in watchlist,
+                            "tracked": code in tracked,
                             "exchange": s.get("exchange", "TWSE")})
     with open(os.path.join(OUT_DIR, "index.js"), "w", encoding="utf-8") as f:
         f.write("window.STOCK_LIST=" + json.dumps(entries, ensure_ascii=False,
@@ -628,14 +661,28 @@ def main():
                     help=f"months of history (default {DEFAULT_MONTHS})")
     ap.add_argument("--rebuild", action="store_true",
                     help="issue no requests; rebuild outputs from the cache only")
+    ap.add_argument("--broker-months", type=int, default=DEFAULT_BROKER_MONTHS,
+                    help=f"months of broker day tables to fetch (default {DEFAULT_BROKER_MONTHS})")
+    ap.add_argument("--refresh-top", action="store_true",
+                    help=f"re-rank {os.path.basename(TOPLIST)} from the market data first")
     args = ap.parse_args()
+
+    # One fetcher at a time: a long backfill and the nightly cron must not walk
+    # the same cache and outputs together. A run that finds the lock taken skips.
+    import fcntl
+    os.makedirs(fd.DATA_DIR, exist_ok=True)
+    lock = open(LOCK, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("another fetch_stocks.py run holds the lock; skipping")
+        return
 
     watchlist = read_watchlist()
     explicit = [c.strip() for c in args.stocks.split(",") if c.strip()] if args.stocks else []
     for c in watchlist + explicit:
         if not re.fullmatch(r"[0-9A-Z]{4,6}", c):
             raise SystemExit(f"ERROR: {c!r} is not a stock code")
-    tracked = set(watchlist) | set(explicit)
 
     today = date.today()
     end = f"{today.year:04d}-{today.month:02d}"
@@ -672,6 +719,20 @@ def main():
         if i % 25 == 0 or i == len(calendar):
             print(f"  {d}  {i}/{len(calendar)}  {(time.time() - t0) / 60:.1f} min", flush=True)
 
+    if args.refresh_top:
+        top = rank_top(market, calendar, names)
+        write_toplist(top, calendar[-1])
+        print(f"  wrote {os.path.basename(TOPLIST)}: {len(top)} stocks, "
+              f"{top[-1][2] / 1e8:,.1f} 億/日 and up")
+    toplist = read_watchlist(TOPLIST)
+    tracked = set(watchlist) | set(toplist) | set(explicit)
+    # Same day of month, broker_months back; compared as a string, so a day
+    # that month lacks (e.g. 02-31) still sorts correctly.
+    y2, m2 = today.year, today.month - args.broker_months
+    while m2 < 1:
+        y2, m2 = y2 - 1, m2 + 12
+    broker_from = f"{y2:04d}-{m2:02d}-{today.day:02d}"
+
     # Today's listing decides the universe; a delisted code drops out of it.
     latest = next((market[d][0] for d in reversed(calendar) if market[d][0]), {})
     if explicit:
@@ -680,16 +741,18 @@ def main():
         codes = watchlist
     else:
         codes = list(dict.fromkeys(
-            watchlist + sorted(c for c in latest if UNIVERSE_RE.fullmatch(c))))
+            watchlist + toplist + sorted(c for c in latest if UNIVERSE_RE.fullmatch(c))))
     if not codes:
         raise SystemExit("ERROR: no stocks to build. Add codes to stocks.txt.")
-    print(f"  building {len(codes)} stock(s), {len(tracked & set(codes))} with broker data")
+    print(f"  building {len(codes)} stock(s), {len(tracked & set(codes))} with broker data "
+          f"(day tables fetched from {broker_from})")
 
     built = failed = 0
     for i, code in enumerate(codes, 1):
         try:
             s = build_stock(code, names.get(code), calendar, market, code in tracked,
-                            args.rebuild, exchange="TPEx" if code in otc else "TWSE")
+                            args.rebuild, exchange="TPEx" if code in otc else "TWSE",
+                            broker_from=broker_from)
         except Exception as e:  # noqa: BLE001 - one bad page must not sink the run
             failed += 1
             print(f"  !! {code} failed: {e}", file=sys.stderr)
@@ -710,7 +773,7 @@ def main():
         if i % 100 == 0:
             print(f"  {i}/{len(codes)} stocks  {(time.time() - t0) / 60:.1f} min", flush=True)
 
-    entries = write_index(watchlist)
+    entries = write_index(watchlist, tracked)
     st = fd._stats
     print(f"  built {built}, failed {failed} · index: {len(entries)} stock(s) · "
           f"{st['requests']} requests / {st['cache_hits']} cache hits / "
