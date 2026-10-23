@@ -34,3 +34,4 @@ vendor/
 .env
 data/.fetch_stocks.lock
 .wrangler/
+.venv/

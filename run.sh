@@ -111,12 +111,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+PY=python3
+[[ -x .venv/bin/python ]] && PY=.venv/bin/python
+
 if [[ "$DO_FETCH" -eq 1 ]]; then
   echo "Fetching TAIEX data (incremental; cached responses are reused)..."
-  python3 fetch_data.py
+  "$PY" fetch_data.py
   if [[ -s stocks.txt ]]; then
     echo "Fetching stock data (whole market + watchlist brokers)..."
-    python3 fetch_stocks.py
+    "$PY" fetch_stocks.py
   fi
 fi
 

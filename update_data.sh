@@ -52,6 +52,9 @@ done
 
 # Resolve an interpreter without relying on cron's PATH.
 PYTHON="${PYTHON:-}"
+if [[ -z "$PYTHON" && -x .venv/bin/python ]]; then
+  PYTHON="$PWD/.venv/bin/python"
+fi
 if [[ -z "$PYTHON" ]]; then
   PYTHON="$(command -v python3 || true)"
 fi

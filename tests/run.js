@@ -100,9 +100,11 @@ function runProcess(suiteName, cmd, args, opts = {}) {
   // ── Python fetcher suite ─────────────────────────────────────────────────
   if (!filter || "fetch".includes(filter) || filter.includes("fetch")) {
     const py = path.join(TESTS_DIR, "fetch_test.py");
-    runProcess("fetch_data.py — parsers & cache (python unittest)", "python3", [py],
+    const venvPy = path.join(ROOT, ".venv", "bin", "python");
+    const python = fs.existsSync(venvPy) ? venvPy : "python3";
+    runProcess("fetch_data.py — parsers & cache (python unittest)", python, [py],
       { missing: fs.existsSync(py) ? null : "tests/fetch_test.py not present" });
-    runProcess("fetch_stocks.py — parsers (python unittest)", "python3",
+    runProcess("fetch_stocks.py — parsers (python unittest)", python,
       [path.join(TESTS_DIR, "stock_fetch_test.py")]);
   }
 
