@@ -15,7 +15,7 @@ Builds a daily series for EVERY listed (TWSE) and OTC (TPEx) stock and ETF
   Tracked stocks only (one request per stock per session - too many for all)
   5. Main-force net + brokers  fubon-ebrokerdj (DJ)     (daily tables, 5/20-day windows)
 
-Tracked = stocks.txt (the watchlist) + top100.txt (the top 100 stocks by
+Tracked = stocks.txt (the watchlist) + top200.txt (the top 200 stocks by
 trading value, written by --refresh-top) + --stocks. Day tables are fetched for
 the last --broker-months (default 12); older days are served from the cache only.
 
@@ -35,7 +35,7 @@ Usage:
   python3 fetch_stocks.py --watchlist-only    # just stocks.txt (fast)
   python3 fetch_stocks.py --stocks 2327,2330  # just these, with broker data
   python3 fetch_stocks.py --months 36         # deeper history (default 24)
-  python3 fetch_stocks.py --refresh-top       # re-rank top100.txt, then fetch
+  python3 fetch_stocks.py --refresh-top       # re-rank top200.txt, then fetch
   python3 fetch_stocks.py --rebuild           # no requests; cache only
 
 Note: Chinese string literals below are matched against response payloads
@@ -57,10 +57,10 @@ import fetch_data as fd
 ROOT = fd.ROOT
 OUT_DIR = os.path.join(fd.DATA_DIR, "stocks")
 WATCHLIST = os.path.join(ROOT, "stocks.txt")
-TOPLIST = os.path.join(ROOT, "top100.txt")
+TOPLIST = os.path.join(ROOT, "top200.txt")
 DEFAULT_MONTHS = 24
 DEFAULT_BROKER_MONTHS = 12
-TOP_N, TOP_SESSIONS = 100, 60
+TOP_N, TOP_SESSIONS = 200, 60
 LOCK = os.path.join(fd.DATA_DIR, ".fetch_stocks.lock")
 
 # DJ broker pages are paced on their own: 0.8 s between requests, doubled (up
